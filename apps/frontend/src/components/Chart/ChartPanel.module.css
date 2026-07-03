@@ -1,0 +1,180 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;        /* Fill the grid cell */
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-base);
+  border-right: 1px solid var(--border-subtle);
+  position: relative;
+}
+
+.panel:last-child {
+  border-right: none;
+}
+
+.focused {
+  box-shadow: inset 0 0 0 1px rgba(61,126,255,0.25);
+  z-index: 1;
+}
+
+/* ─── Panel toolbar ─────────────────────────────────────────────────────── */
+
+.panelToolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 8px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.panelActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+}
+
+.actionBtn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+.actionActive    { background: var(--accent-glow); color: var(--accent); }
+.closeBtn:hover  { background: var(--candle-down-dim); color: var(--candle-down); }
+
+/* ─── Chart area — must fill remaining height ──────────────────────────── */
+
+.chartArea {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;        /* Critical for flex children */
+  width: 100%;
+}
+
+.ohlcvRow {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+/* ─── Loading overlay ───────────────────────────────────────────────────── */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(11,14,17,0.75);
+  backdrop-filter: blur(4px);
+  z-index: 20;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--border-muted);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.errorText {
+  color: var(--candle-down);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ─── Floating indicator panel ──────────────────────────────────────────── */
+
+/* ─── Selected-drawing options bar ──────────────────────────────────────── */
+
+.drawingOptions {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  z-index: 30;
+}
+
+.swatchRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(255,255,255,0.25);
+  cursor: pointer;
+  padding: 0;
+}
+
+.swatch:hover { transform: scale(1.15); }
+
+.optBtn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.optBtn:hover { color: var(--text-primary); background: var(--bg-base); }
+.optActive { color: var(--accent); border-color: var(--accent); background: var(--accent-glow); }
+
+.indicatorOverlay {
+  position: absolute;
+  top: 36px;
+  right: 8px;
+  width: 200px;
+  max-height: calc(100% - 44px);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  z-index: 30;
+  overflow-y: auto;
+  overflow-x: hidden;
+}

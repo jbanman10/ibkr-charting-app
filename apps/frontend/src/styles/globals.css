@@ -1,0 +1,116 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ─── Design tokens ─────────────────────────────────────────────────────── */
+:root {
+  /* Surface hierarchy */
+  --bg-base:       #0b0e11;
+  --bg-panel:      #131720;
+  --bg-elevated:   #1a2030;
+  --bg-overlay:    #202840;
+  --bg-input:      #161c2a;
+
+  /* Borders */
+  --border-subtle: rgba(255,255,255,0.05);
+  --border-muted:  rgba(255,255,255,0.10);
+  --border-strong: rgba(255,255,255,0.18);
+
+  /* Text */
+  --text-primary:   #e8ecf4;
+  --text-secondary: #8a95a8;
+  --text-tertiary:  #4e5a6e;
+  --text-accent:    #52a8ff;
+
+  /* Market colors */
+  --candle-up:      #26a69a;
+  --candle-down:    #ef5350;
+  --candle-up-dim:  rgba(38,166,154,0.15);
+  --candle-down-dim:rgba(239,83,80,0.15);
+
+  /* Accent / UI */
+  --accent:         #3d7eff;
+  --accent-glow:    rgba(61,126,255,0.20);
+  --accent-hover:   #5a96ff;
+  --gold:           #f0b429;
+  --gold-dim:       rgba(240,180,41,0.15);
+
+  /* Indicator colors */
+  --ind-sma-20:   #f0b429;
+  --ind-sma-50:   #a78bfa;
+  --ind-ema-20:   #34d399;
+  --ind-ema-50:   #fb923c;
+
+  /* Layout */
+  --toolbar-h:    44px;
+  --statusbar-h:  28px;
+  --sidebar-w:    240px;
+
+  /* Fonts */
+  --font-ui:    'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono:  'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+
+  /* Radii */
+  --radius-sm:  6px;
+  --radius-md:  8px;
+  --radius-lg:  12px;
+
+  /* Easing */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.5;
+  /* Inter reads best with tabular numerals + tight spacing in dense UIs */
+  font-feature-settings: 'tnum' 1, 'cv08' 1;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+button, input, select { font-family: inherit; letter-spacing: inherit; }
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-muted); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* ─── Selection ──────────────────────────────────────────────────────────── */
+::selection { background: var(--accent-glow); color: var(--text-primary); }
+
+/* ─── Focus ──────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* ─── Utility classes ────────────────────────────────────────────────────── */
+.mono { font-family: var(--font-mono); }
+.text-up   { color: var(--candle-up); }
+.text-down { color: var(--candle-down); }
+.text-muted { color: var(--text-secondary); }
+
+/* ─── Animated pulse for live indicator ─────────────────────────────────── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.85); }
+}
+
+/* ─── Fade-in for panels ─────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fade-up {
+  animation: fadeUp 0.25s var(--ease-out) both;
+}

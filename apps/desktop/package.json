@@ -1,0 +1,51 @@
+{
+  "name": "@ibkr-chart/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone Electron shell for ibkr-chart",
+  "author": "ibkr-chart",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "bundle:backend": "esbuild ../backend/src/server.ts --bundle --platform=node --format=cjs --outfile=build/backend/backend.cjs --external:pino-pretty",
+    "build:icon": "node scripts/make-icon.mjs",
+    "dist": "npm run build:icon && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "png-to-ico": "^3.0.1",
+    "sharp": "^0.35.3"
+  },
+  "build": {
+    "appId": "com.ibkrchart.desktop",
+    "productName": "IBKR Chart",
+    "electronVersion": "33.4.11",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend",
+        "to": "backend"
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend-dist"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

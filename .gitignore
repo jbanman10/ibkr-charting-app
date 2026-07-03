@@ -1,0 +1,34 @@
+# ─── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
+
+# ─── Environment / secrets ───────────────────────────────────────────────────
+.env
+.env.*
+# keep the documented templates
+!.env.example
+*.local
+
+# ─── Build output ────────────────────────────────────────────────────────────
+dist/
+build/
+*.tsbuildinfo
+
+# Electron packaging output (installers + unpacked app, ~350MB)
+apps/desktop/release/
+
+# ─── Logs / caches ───────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+.vite/
+.cache/
+
+# ─── OS cruft ────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Editor / local tool state ───────────────────────────────────────────────
+.claude/settings.local.json
+
+# ─── Stale nested duplicate of the project (see CLAUDE.md) — not source ──────
+ibkr-chart/

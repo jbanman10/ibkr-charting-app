@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "composite": true,
+    "paths": {
+      "@ibkr-chart/types": ["../../packages/types/src/index.ts"]
+    }
+  },
+  "references": [
+    { "path": "../../packages/types" }
+  ],
+  "include": ["src"]
+}
