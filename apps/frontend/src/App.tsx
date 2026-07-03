@@ -48,11 +48,12 @@ export default function App() {
   const routeBar = useCallback((
     ev: '__barUpdateHandler' | '__barCloseHandler',
     symbol: string,
-    bar: Bar
+    bar: Bar,
+    tf: Timeframe
   ) => {
     for (const p of layoutRef.current.panels) {
       const el = document.getElementById(`chart-panel-${p.id}`);
-      (el as any)?.[ev]?.(symbol, bar);
+      (el as any)?.[ev]?.(symbol, bar, tf);
     }
   }, []);
 
@@ -64,8 +65,8 @@ export default function App() {
   }, []);
 
   const { status, ibkrConnected, subscribe, unsubscribe } = useMarketStream({
-    onBarUpdate: useCallback((sym: string, bar: Bar, _tf: Timeframe) => routeBar('__barUpdateHandler', sym, bar), [routeBar]),
-    onBarClose:  useCallback((sym: string, bar: Bar, _tf: Timeframe) => routeBar('__barCloseHandler',  sym, bar), [routeBar]),
+    onBarUpdate: useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barUpdateHandler', sym, bar, tf), [routeBar]),
+    onBarClose:  useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barCloseHandler',  sym, bar, tf), [routeBar]),
     onTick:      useCallback((tick: Tick) => {
       // Drive live candle movement.
       routeTick(tick);

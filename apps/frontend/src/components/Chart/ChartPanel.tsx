@@ -221,13 +221,13 @@ export default function ChartPanel({
 
   // ─── RT bar handlers ──────────────────────────────────────────────────────
 
-  const barUpdateRef = useRef((symbol: string, bar: Bar) => {
+  const barUpdateRef = useRef((symbol: string, bar: Bar, _tf?: Timeframe) => {
     if (symbol !== panel.symbol) return;
     currentBarRef.current = { ...bar };
     chartRef.current?.updateBar(bar);
   });
 
-  const barCloseRef = useRef((symbol: string, bar: Bar) => {
+  const barCloseRef = useRef((symbol: string, bar: Bar, _tf?: Timeframe) => {
     if (symbol !== panel.symbol) return;
     const bars = barsRef.current;
     const idx = bars.findIndex((b) => b.time === bar.time);
@@ -286,8 +286,12 @@ export default function ChartPanel({
   }, [panel.symbol, panel.timeframe, scheduleLiveRedraw]);
 
   useEffect(() => {
-    barUpdateRef.current = (symbol: string, bar: Bar) => {
+    barUpdateRef.current = (symbol: string, bar: Bar, tf?: Timeframe) => {
       if (symbol !== panel.symbol) return;
+      // Drop bars from another timeframe's subscription (stale messages during a
+      // TF switch would pollute the array — the source of daily-chart duplicate
+      // "asc ordered" errors).
+      if (tf && tf !== panel.timeframe) return;
       const cur = currentBarRef.current;
       if (cur && Number(bar.time) === Number(cur.time)) {
         if (INTRADAY_TF.has(panel.timeframe)) {
@@ -319,8 +323,9 @@ export default function ChartPanel({
       // Keep pre/post shading + levels tracking the live forming bar (~5s cadence).
       recomputeSessions();
     };
-    barCloseRef.current = (symbol: string, bar: Bar) => {
+    barCloseRef.current = (symbol: string, bar: Bar, tf?: Timeframe) => {
       if (symbol !== panel.symbol) return;
+      if (tf && tf !== panel.timeframe) return; // stale TF-switch message
       const bars = barsRef.current;
       const idx = bars.findIndex((b) => Number(b.time) === Number(bar.time));
       if (idx >= 0) {
@@ -358,8 +363,8 @@ export default function ChartPanel({
   useEffect(() => {
     const el = document.getElementById(`chart-panel-${panel.id}`);
     if (!el) return;
-    (el as any).__barUpdateHandler = (sym: string, bar: Bar) => barUpdateRef.current(sym, bar);
-    (el as any).__barCloseHandler  = (sym: string, bar: Bar) => barCloseRef.current(sym, bar);
+    (el as any).__barUpdateHandler = (sym: string, bar: Bar, tf?: Timeframe) => barUpdateRef.current(sym, bar, tf);
+    (el as any).__barCloseHandler  = (sym: string, bar: Bar, tf?: Timeframe) => barCloseRef.current(sym, bar, tf);
     (el as any).__tickHandler      = (sym: string, tick: Tick) => tickHandlerRef.current(sym, tick);
     return () => {
       (el as any).__barUpdateHandler = null;

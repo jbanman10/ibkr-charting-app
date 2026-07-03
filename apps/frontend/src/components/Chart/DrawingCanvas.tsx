@@ -174,7 +174,9 @@ export default function DrawingCanvas({
     if (time === null) return null;
     const logical: DrawingPoint = { time, price };
 
-    // Hold Ctrl to snap to the nearest candle's high or low (whichever is closer).
+    // Hold Ctrl to snap to the nearest candle's high or low: above the high →
+    // high, below the low → low, inside the candle's range → whichever wick is
+    // nearer (ties go to the high).
     if (e.ctrlKey && bars.length) {
       let nearest = bars[0];
       let best = Infinity;
@@ -182,10 +184,12 @@ export default function DrawingCanvas({
         const d = Math.abs(Number(b.time) - logical.time);
         if (d < best) { best = d; nearest = b; }
       }
-      const snapPrice =
-        Math.abs(logical.price - nearest.high) <= Math.abs(logical.price - nearest.low)
-          ? nearest.high
-          : nearest.low;
+      const hi = Number(nearest.high);
+      const lo = Number(nearest.low);
+      let snapPrice: number;
+      if (logical.price >= hi) snapPrice = hi;
+      else if (logical.price <= lo) snapPrice = lo;
+      else snapPrice = hi - logical.price <= logical.price - lo ? hi : lo;
       return { time: Number(nearest.time), price: snapPrice };
     }
 
