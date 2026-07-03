@@ -2,34 +2,34 @@
 
 /* ─── Design tokens ─────────────────────────────────────────────────────── */
 :root {
-  /* Surface hierarchy */
-  --bg-base:       #0b0e11;
-  --bg-panel:      #131720;
-  --bg-elevated:   #1a2030;
-  --bg-overlay:    #202840;
-  --bg-input:      #161c2a;
+  /* Surface hierarchy — matched to TradingView's dark theme */
+  --bg-base:       #131722;
+  --bg-panel:      #1e222d;
+  --bg-elevated:   #2a2e39;
+  --bg-overlay:    #363a45;
+  --bg-input:      #1a1f2b;
 
-  /* Borders */
-  --border-subtle: rgba(255,255,255,0.05);
-  --border-muted:  rgba(255,255,255,0.10);
-  --border-strong: rgba(255,255,255,0.18);
+  /* Borders (TV uses solid #2a2e39-family separators) */
+  --border-subtle: #2a2e39;
+  --border-muted:  #363a45;
+  --border-strong: #434651;
 
   /* Text */
-  --text-primary:   #e8ecf4;
-  --text-secondary: #8a95a8;
-  --text-tertiary:  #4e5a6e;
-  --text-accent:    #52a8ff;
+  --text-primary:   #d1d4dc;
+  --text-secondary: #787b86;
+  --text-tertiary:  #50535e;
+  --text-accent:    #5b9cf6;
 
-  /* Market colors */
-  --candle-up:      #26a69a;
-  --candle-down:    #ef5350;
-  --candle-up-dim:  rgba(38,166,154,0.15);
-  --candle-down-dim:rgba(239,83,80,0.15);
+  /* Market colors (TV dark green/red) */
+  --candle-up:      #089981;
+  --candle-down:    #f23645;
+  --candle-up-dim:  rgba(8,153,129,0.15);
+  --candle-down-dim:rgba(242,54,69,0.15);
 
-  /* Accent / UI */
-  --accent:         #3d7eff;
-  --accent-glow:    rgba(61,126,255,0.20);
-  --accent-hover:   #5a96ff;
+  /* Accent / UI (TV blue) */
+  --accent:         #2962ff;
+  --accent-glow:    rgba(41,98,255,0.20);
+  --accent-hover:   #4a7dff;
   --gold:           #f0b429;
   --gold-dim:       rgba(240,180,41,0.15);
 

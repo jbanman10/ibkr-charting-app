@@ -79,22 +79,22 @@ function toChartTime(unixSeconds: number | string, timeframe: string): Time {
 
 const CHART_OPTIONS: DeepPartial<ChartOptions> = {
   layout: {
-    background: { type: ColorType.Solid, color: '#0b0e11' },
-    textColor: '#8a95a8',
+    background: { type: ColorType.Solid, color: '#131722' }, // TV dark chart bg
+    textColor: '#787b86',
     fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
     fontSize: 11,
   },
   grid: {
-    vertLines: { color: 'rgba(255,255,255,0.04)' },
-    horzLines: { color: 'rgba(255,255,255,0.04)' },
+    vertLines: { color: 'rgba(42,46,57,0.55)' },
+    horzLines: { color: 'rgba(42,46,57,0.55)' },
   },
   crosshair: { mode: 0 }, // Normal (free-follow). Magnet/snap only while Ctrl is held.
   rightPriceScale: {
-    borderColor: 'rgba(255,255,255,0.1)',
+    borderColor: '#2a2e39',
     scaleMargins: { top: 0.1, bottom: 0.2 },
   },
   timeScale: {
-    borderColor: 'rgba(255,255,255,0.1)',
+    borderColor: '#2a2e39',
     timeVisible: true,
     secondsVisible: false,
     // A little blank space to the right of the last candle (breathing room +
@@ -116,6 +116,7 @@ export interface SessionLevelLine {
   price: number;
   color: string;
   title: string; // axis label
+  solid?: boolean; // solid line (PDH/PDL); dashed otherwise
 }
 
 export interface ChartHandle {
@@ -201,12 +202,12 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       });
 
       const candle = chart.addCandlestickSeries({
-        upColor:         '#26a69a',
-        downColor:       '#ef5350',
-        borderUpColor:   '#26a69a',
-        borderDownColor: '#ef5350',
-        wickUpColor:     '#26a69a',
-        wickDownColor:   '#ef5350',
+        upColor:         '#089981',
+        downColor:       '#f23645',
+        borderUpColor:   '#089981',
+        borderDownColor: '#f23645',
+        wickUpColor:     '#089981',
+        wickDownColor:   '#f23645',
       });
 
       const volume = chart.addHistogramSeries({
@@ -289,8 +290,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         time:  toChartTime(b.time, tf),
         value: Number(b.volume),
         color: Number(b.close) >= Number(b.open)
-          ? 'rgba(38,166,154,0.4)'
-          : 'rgba(239,83,80,0.4)',
+          ? 'rgba(8,153,129,0.4)'
+          : 'rgba(242,54,69,0.4)',
       }));
       return { cd, vd, lastTime: Number(ordered[ordered.length - 1].time) };
     }, []);
@@ -356,8 +357,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         volumeRef.current?.update({
           time: t, value: Number(bar.volume),
           color: Number(bar.close) >= Number(bar.open)
-            ? 'rgba(38,166,154,0.4)'
-            : 'rgba(239,83,80,0.4)',
+            ? 'rgba(8,153,129,0.4)'
+            : 'rgba(242,54,69,0.4)',
         });
       } catch (err) {
         console.error('[ChartContainer] updateBar error:', err);
@@ -424,7 +425,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
           price: l.price,
           color: l.color,
           lineWidth: 1 as const,
-          lineStyle: LineStyle.Dashed,
+          lineStyle: l.solid ? LineStyle.Solid : LineStyle.Dashed,
           axisLabelVisible: true,
           title: l.title,
         };
