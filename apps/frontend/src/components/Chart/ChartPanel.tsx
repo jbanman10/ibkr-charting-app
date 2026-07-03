@@ -6,7 +6,7 @@ import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { DrawingToolType } from './DrawingCanvas';
 import { useHistoricalBars } from '../../hooks/useHistoricalBars';
 import { useSymbolDrawings } from '../../hooks/useSymbolDrawings';
-import { seedDrawings } from '../../lib/drawingStore';
+import { seedDrawings, getDrawings } from '../../lib/drawingStore';
 import { computeIndicators } from '../../lib/indicators';
 import { computeSessionLevels, computeSessionRegions, etParts, classify } from '../../lib/sessions';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
@@ -14,6 +14,7 @@ import type { SessionOverlays } from '../../lib/layout';
 import ChartContainer, { type ChartHandle, type SessionLevelLine } from './ChartContainer';
 import PriceDisplay from './PriceDisplay';
 import IndicatorPanel from './IndicatorPanel';
+import DrawingSettings from './DrawingSettings';
 import SymbolSearch from '../Toolbar/SymbolSearch';
 import TimeframeSelector from '../Toolbar/TimeframeSelector';
 import DrawingToolbar from '../Toolbar/DrawingToolbar';
@@ -383,6 +384,7 @@ export default function ChartPanel({
   // symbol (any timeframe / any panel), lined up by absolute time.
   const [drawings, setDrawings] = useSymbolDrawings(panel.symbol);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+  const [showDrawingSettings, setShowDrawingSettings] = useState(false);
   const [rectColor, setRectColor] = useState<RectColor>(RECT_PALETTE[0]);
 
   // One-time migration of any legacy per-panel drawings into the symbol store.
@@ -397,14 +399,26 @@ export default function ChartPanel({
 
   const updateSelectedDrawing = useCallback((patch: Partial<Drawing>) => {
     if (!selectedDrawingId) return;
-    setDrawings(drawings.map((d) => (d.id === selectedDrawingId ? { ...d, ...patch } as Drawing : d)));
-  }, [selectedDrawingId, drawings, setDrawings]);
+    // Read the latest store state (not the render-time array) so two rapid
+    // setting changes in the same tick don't clobber each other.
+    const current = getDrawings(panel.symbol);
+    setDrawings(current.map((d) => (d.id === selectedDrawingId ? { ...d, ...patch } as Drawing : d)));
+    // Remember the last rectangle color so new rectangles use it.
+    const p = patch as { borderColor?: string; fillColor?: string };
+    if (p.borderColor && p.fillColor) {
+      setRectColor(
+        RECT_PALETTE.find((c) => c.border === p.borderColor)
+          ?? { name: 'Custom', border: p.borderColor, fill: p.fillColor }
+      );
+    }
+  }, [selectedDrawingId, panel.symbol, setDrawings]);
 
   const deleteSelectedDrawing = useCallback(() => {
     if (!selectedDrawingId) return;
-    setDrawings(drawings.filter((d) => d.id !== selectedDrawingId));
+    setDrawings(getDrawings(panel.symbol).filter((d) => d.id !== selectedDrawingId));
     setSelectedDrawingId(null);
-  }, [selectedDrawingId, drawings, setDrawings]);
+    setShowDrawingSettings(false);
+  }, [selectedDrawingId, panel.symbol, setDrawings]);
 
   const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId) ?? null;
 
@@ -420,6 +434,7 @@ export default function ChartPanel({
         deleteSelectedDrawing();
       } else if (e.key === 'Escape') {
         setSelectedDrawingId(null);
+        setShowDrawingSettings(false);
       }
     };
     document.addEventListener('keydown', onKey);
@@ -518,41 +533,24 @@ export default function ChartPanel({
           bars={bars}
           selectedDrawingId={selectedDrawingId}
           onDrawingsChange={handleDrawingsChange}
-          onDrawingSelect={setSelectedDrawingId}
+          onDrawingSelect={(id) => {
+            setSelectedDrawingId(id);
+            if (id === null) setShowDrawingSettings(false); // clicked empty chart
+          }}
+          onDrawingOpenSettings={(id) => { setSelectedDrawingId(id); setShowDrawingSettings(true); }}
           rectColor={{ border: rectColor.border, fill: rectColor.fill }}
           dataTimeRange={dataTimeRange}
           onReady={handleChartReady}
           onDrawingComplete={() => onToolChange('none')}
         />
 
-        {selectedDrawing && (
-          <div className={styles.drawingOptions} onClick={(e) => e.stopPropagation()}>
-            {selectedDrawing.type === 'rectangle' && (
-              <div className={styles.swatchRow}>
-                {RECT_PALETTE.map((c) => (
-                  <button
-                    key={c.name}
-                    className={styles.swatch}
-                    style={{ background: c.border }}
-                    title={c.name}
-                    onClick={() => { updateSelectedDrawing({ borderColor: c.border, fillColor: c.fill } as Partial<Drawing>); setRectColor(c); }}
-                  />
-                ))}
-              </div>
-            )}
-            {(selectedDrawing.type === 'rectangle' || selectedDrawing.type === 'trendline') && (
-              <button
-                className={`${styles.optBtn} ${(selectedDrawing as any).extendRight ? styles.optActive : ''}`}
-                onClick={() => updateSelectedDrawing({ extendRight: !(selectedDrawing as any).extendRight } as Partial<Drawing>)}
-                title="Extend the right edge to the chart edge"
-              >
-                Extend →
-              </button>
-            )}
-            <button className={styles.optBtn} onClick={deleteSelectedDrawing} title="Delete drawing">
-              Delete
-            </button>
-          </div>
+        {showDrawingSettings && selectedDrawing && (
+          <DrawingSettings
+            drawing={selectedDrawing}
+            onChange={updateSelectedDrawing}
+            onDelete={deleteSelectedDrawing}
+            onClose={() => setShowDrawingSettings(false)}
+          />
         )}
 
         {showIndicators && (

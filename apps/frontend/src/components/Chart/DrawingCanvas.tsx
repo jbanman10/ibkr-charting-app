@@ -45,6 +45,7 @@ interface Props {
   onDrawingsChange: (drawings: Drawing[]) => void;
   onDrawingComplete?: () => void;
   onSelect?: (id: string | null) => void;
+  onOpenSettings?: (id: string) => void;
   selectedId?: string | null;
   onDragChange?: (id: string | null) => void;
   rectColor?: { border: string; fill: string };
@@ -112,6 +113,7 @@ export default function DrawingCanvas({
   onDrawingsChange,
   onDrawingComplete,
   onSelect,
+  onOpenSettings,
   selectedId = null,
   onDragChange,
   rectColor,
@@ -384,6 +386,30 @@ export default function DrawingCanvas({
     chart.subscribeClick(onClick);
     return () => chart.unsubscribeClick(onClick);
   }, [chart, priceSeries, dataTimeRange, width, activeTool, onSelect]);
+
+  // Double-click on a drawing opens its settings dialog (select + open). Uses a
+  // native DOM listener on the shared container (not the chart library's dblclick
+  // API) so it works whether the event lands on the chart canvases or on this
+  // overlay while it's interactive.
+  useEffect(() => {
+    if (!chart || !priceSeries) return;
+    const el = canvasRef.current?.parentElement;
+    if (!el) return;
+    const onDbl = (e: MouseEvent) => {
+      if (activeTool !== 'none') return;
+      const rect = el.getBoundingClientRect();
+      const pt = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      for (const d of [...drawingsRef.current].reverse()) {
+        if (hitTestDrawing(d, pt, chart, priceSeries, dataTimeRange, width)) {
+          onSelect?.(d.id);
+          onOpenSettings?.(d.id);
+          return;
+        }
+      }
+    };
+    el.addEventListener('dblclick', onDbl);
+    return () => el.removeEventListener('dblclick', onDbl);
+  }, [chart, priceSeries, dataTimeRange, width, activeTool, onSelect, onOpenSettings]);
 
   // Hover detection over the selected drawing, so we know when to make the canvas
   // interactive (vs. letting pans pass through). Uses the chart crosshair event,

@@ -139,6 +139,7 @@ interface Props {
   selectedDrawingId?: string | null;
   onDrawingsChange?: (d: Drawing[]) => void;
   onDrawingSelect?: (id: string | null) => void;
+  onDrawingOpenSettings?: (id: string) => void;
   rectColor?: { border: string; fill: string };
   dataTimeRange?: DataTimeRange | null;
   onReady?: () => void;
@@ -148,7 +149,7 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const ChartContainer = forwardRef<ChartHandle, Props>(
-  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
+  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -462,6 +463,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
           onDrawingsChange={onDrawingsChange ?? (() => {})}
           onDrawingComplete={onDrawingComplete}
           onSelect={onDrawingSelect}
+          onOpenSettings={onDrawingOpenSettings}
           selectedId={selectedDrawingId}
           onDragChange={setDraggingId}
           rectColor={rectColor}

@@ -33,6 +33,7 @@ export interface TrendLineDrawing {
   p2: DrawingPoint;
   color: string;
   width: number;
+  dashed?: boolean;
   extended: boolean;     // extend both directions to the chart edges
   extendRight?: boolean; // extend only the right edge to the chart edge (and beyond)
 }
@@ -53,6 +54,7 @@ export interface RectangleDrawing {
   p2: DrawingPoint;
   borderColor: string;
   fillColor: string;
+  borderWidth?: number;  // default 1
   extendRight?: boolean; // open the right edge to the chart edge (and beyond)
 }
 
@@ -355,10 +357,12 @@ function renderTrendLine(
 
   ctx.strokeStyle = d.color;
   ctx.lineWidth = selected ? d.width + 1 : d.width;
+  if (d.dashed) ctx.setLineDash([6, 4]);
   ctx.beginPath();
   ctx.moveTo(startX, startY);
   ctx.lineTo(endX, endY);
   ctx.stroke();
+  ctx.setLineDash([]);
 
   if (selected) {
     drawHandle(ctx, a.x, a.y, d.color);
@@ -389,8 +393,9 @@ function renderRectangle(
   ctx.fillStyle = d.fillColor;
   ctx.fillRect(x, y, w, h);
 
+  const bw = d.borderWidth ?? 1;
   ctx.strokeStyle = selected ? '#ffffff' : d.borderColor;
-  ctx.lineWidth = selected ? 2 : 1;
+  ctx.lineWidth = selected ? bw + 1 : bw;
   ctx.strokeRect(x, y, w, h);
 
   if (selected) {
