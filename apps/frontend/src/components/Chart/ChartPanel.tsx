@@ -28,12 +28,12 @@ function buildSessionLines(
   ov: SessionOverlays
 ): SessionLevelLine[] {
   const out: SessionLevelLine[] = [];
-  const push = (key: string, price: number | null, color: string, title: string) => {
-    if (price != null) out.push({ key, price, color, title });
+  const push = (key: string, price: number | null, color: string, title: string, solid = false) => {
+    if (price != null) out.push({ key, price, color, title, solid });
   };
   if (ov.prevDayHL) {
-    push('PDH', levels.prevDayHigh, SESSION_COLORS.prevDay, 'PDH');
-    push('PDL', levels.prevDayLow, SESSION_COLORS.prevDay, 'PDL');
+    push('PDH', levels.prevDayHigh, SESSION_COLORS.prevDayHigh, 'PDH', true);
+    push('PDL', levels.prevDayLow, SESSION_COLORS.prevDayLow, 'PDL', true);
   }
   if (ov.premarketHL) {
     push('PMH', levels.premarketHigh, SESSION_COLORS.premarket, 'PMH');

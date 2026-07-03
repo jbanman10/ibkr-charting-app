@@ -13,7 +13,7 @@ interface Props {
 
 const SESSION_TOGGLES: Array<{ key: keyof SessionOverlays; label: string; color: string }> = [
   { key: 'openingRange', label: 'Opening range (5m)', color: SESSION_COLORS.openingRange },
-  { key: 'prevDayHL',    label: 'Prev day H/L',       color: SESSION_COLORS.prevDay },
+  { key: 'prevDayHL',    label: 'Prev day H/L',       color: SESSION_COLORS.prevDayHigh },
   { key: 'premarketHL',  label: 'Pre-market H/L',     color: SESSION_COLORS.premarket },
   { key: 'shading',      label: 'Session shading',    color: SESSION_COLORS.premarket },
 ];

@@ -104,7 +104,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
-    backgroundColor: '#0e0f13',
+    backgroundColor: '#131722',
     title: 'IBKR Chart',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

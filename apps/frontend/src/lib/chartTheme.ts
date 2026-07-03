@@ -54,12 +54,12 @@ export const chartTheme: DeepPartial<ChartOptions> = {
 };
 
 export const candlestickTheme: DeepPartial<CandlestickSeriesOptions> = {
-  upColor:          '#26a69a',
-  downColor:        '#ef5350',
-  borderUpColor:    '#26a69a',
-  borderDownColor:  '#ef5350',
-  wickUpColor:      '#26a69a',
-  wickDownColor:    '#ef5350',
+  upColor:          '#089981',
+  downColor:        '#f23645',
+  borderUpColor:    '#089981',
+  borderDownColor:  '#f23645',
+  wickUpColor:      '#089981',
+  wickDownColor:    '#f23645',
   borderVisible:    true,
   wickVisible:      true,
   priceLineVisible: true,
@@ -69,8 +69,8 @@ export const candlestickTheme: DeepPartial<CandlestickSeriesOptions> = {
 };
 
 export const volumeTheme = {
-  upColor:   'rgba(38,166,154,0.25)',
-  downColor: 'rgba(239,83,80,0.25)',
+  upColor:   'rgba(8,153,129,0.25)',
+  downColor: 'rgba(242,54,69,0.25)',
 };
 
 export const indicatorColors: Record<string, string> = {
@@ -94,7 +94,8 @@ export function getIndicatorLineOptions(key: string): DeepPartial<LineSeriesOpti
 
 // ─── Session level / shading colors ────────────────────────────────────────────
 export const SESSION_COLORS = {
-  prevDay:      '#f0b429', // prev day high/low — amber
+  prevDayHigh:  '#089981', // prev day high — solid green
+  prevDayLow:   '#f23645', // prev day low — solid red
   premarket:    '#22d3ee', // pre-market high/low — cyan
   openingRange: '#c084fc', // first-5min high/low — purple
   shadePre:     'rgba(56,189,248,0.06)',  // pre-market background tint (cool)
@@ -106,8 +107,8 @@ export interface RectColor { name: string; border: string; fill: string; }
 
 export const RECT_PALETTE: RectColor[] = [
   { name: 'Blue',   border: '#3d7eff', fill: 'rgba(61,126,255,0.15)' },
-  { name: 'Green',  border: '#26a69a', fill: 'rgba(38,166,154,0.15)' },
-  { name: 'Red',    border: '#ef5350', fill: 'rgba(239,83,80,0.15)' },
+  { name: 'Green',  border: '#089981', fill: 'rgba(8,153,129,0.15)' },
+  { name: 'Red',    border: '#f23645', fill: 'rgba(242,54,69,0.15)' },
   { name: 'Amber',  border: '#f0b429', fill: 'rgba(240,180,41,0.15)' },
   { name: 'Purple', border: '#c084fc', fill: 'rgba(192,132,252,0.15)' },
   { name: 'Cyan',   border: '#22d3ee', fill: 'rgba(34,211,238,0.15)' },

@@ -15,7 +15,7 @@
 }
 
 .focused {
-  box-shadow: inset 0 0 0 1px rgba(61,126,255,0.25);
+  box-shadow: inset 0 0 0 1px rgba(41,98,255,0.35);
   z-index: 1;
 }
 
@@ -89,7 +89,7 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  background: rgba(11,14,17,0.75);
+  background: rgba(19,23,34,0.78);
   backdrop-filter: blur(4px);
   z-index: 20;
   color: var(--text-secondary);
