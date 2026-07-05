@@ -17,6 +17,7 @@ import ChartPanel from './components/Chart/ChartPanel';
 import ResizableGrid from './components/Grid/ResizableGrid';
 import LayoutPicker from './components/Grid/LayoutPicker';
 import StatusBar from './components/StatusBar';
+import MarketSummary from './components/MarketSummary/MarketSummary';
 import styles from './App.module.css';
 
 const AUTOSAVE_MS = 5_000;
@@ -27,6 +28,7 @@ export default function App() {
     () => loadLayout().panels[0]?.id ?? ''
   );
   const [activeTool, setActiveTool] = useState<DrawingToolType>('none');
+  const [showSummary, setShowSummary] = useState(false);
   const layoutRef = useRef(layout);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
 
@@ -155,6 +157,20 @@ export default function App() {
         <div className={styles.toolbarRight}>
           <button
             className={styles.iconBtn}
+            onClick={() => setShowSummary(true)}
+            title="Morning market summary"
+          >
+            {/* sunrise icon */}
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+              <path d="M1.5 10.5h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+              <path d="M4 10.5a3 3 0 0 1 6 0" stroke="currentColor" strokeWidth="1.3"/>
+              <path d="M7 1.5v2M2.4 4.9l1.4 1.4M11.6 4.9l-1.4 1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+            <span>Summary</span>
+          </button>
+
+          <button
+            className={styles.iconBtn}
             onClick={() => saveLayout(layoutRef.current)}
             title="Save layout"
           >
@@ -208,6 +224,9 @@ export default function App() {
           ))}
         </ResizableGrid>
       </div>
+
+      {/* ── Morning summary popup ───────────────────────────────────── */}
+      {showSummary && <MarketSummary onClose={() => setShowSummary(false)} />}
 
       {/* ── Status bar ──────────────────────────────────────────────── */}
       <StatusBar
