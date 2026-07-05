@@ -139,6 +139,7 @@ interface Props {
   selectedDrawingId?: string | null;
   onDrawingsChange?: (d: Drawing[]) => void;
   onDrawingSelect?: (id: string | null) => void;
+  onDrawingOpenSettings?: (id: string) => void;
   rectColor?: { border: string; fill: string };
   dataTimeRange?: DataTimeRange | null;
   onReady?: () => void;
@@ -148,7 +149,7 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const ChartContainer = forwardRef<ChartHandle, Props>(
-  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
+  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -172,11 +173,21 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     useEffect(() => { tfRef.current = timeframe; }, [timeframe]);
 
     // Crosshair follows the mouse freely; hold Ctrl to magnet/snap it to candles.
+    // Only while NO drawing tool is active: the drawing overlay has its own Ctrl
+    // high/low snap and positions the crosshair itself — the library's magnet
+    // (which anchors to the CLOSE) would yank that feedback to the wrong price
+    // and make snapping look broken.
+    const activeToolRef = useRef(activeTool);
+    useEffect(() => {
+      activeToolRef.current = activeTool;
+      // If a tool is picked while Ctrl-magnet is already on, drop the magnet.
+      if (activeTool !== 'none') chartRef.current?.applyOptions({ crosshair: { mode: 0 } });
+    }, [activeTool]);
     useEffect(() => {
       const setMagnet = (on: boolean) =>
         chartRef.current?.applyOptions({ crosshair: { mode: on ? 1 : 0 } });
       const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Control') setMagnet(e.type === 'keydown');
+        if (e.key === 'Control') setMagnet(e.type === 'keydown' && activeToolRef.current === 'none');
       };
       const reset = () => setMagnet(false);
       document.addEventListener('keydown', onKey);
@@ -271,8 +282,12 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       const validBars = bars.filter((b) => isValidChartTime(b.time) && Number(b.open) > 0);
       if (validBars.length === 0) return null;
 
+      // De-dupe by the CONVERTED chart time, not the raw time: on daily charts
+      // several distinct unix times can collapse to the same "YYYY-MM-DD" (e.g.
+      // an intraday bar that leaked in during a timeframe switch), and any
+      // post-conversion duplicate throws "asc ordered" and blanks the chart.
       const byTime = new Map<string, Bar>();
-      for (const b of validBars) byTime.set(String(b.time), b);
+      for (const b of validBars) byTime.set(String(toChartTime(b.time, tf)), b);
       const ordered = [...byTime.values()].sort((a, z) => {
         const ta = typeof a.time === 'string' ? Date.parse(a.time) : Number(a.time);
         const tz = typeof z.time === 'string' ? Date.parse(z.time) : Number(z.time);
@@ -462,6 +477,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
           onDrawingsChange={onDrawingsChange ?? (() => {})}
           onDrawingComplete={onDrawingComplete}
           onSelect={onDrawingSelect}
+          onOpenSettings={onDrawingOpenSettings}
           selectedId={selectedDrawingId}
           onDragChange={setDraggingId}
           rectColor={rectColor}

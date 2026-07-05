@@ -22,21 +22,18 @@ export default function ExtendedHoursToggle({ useRTH, onChange }: Props) {
     <button
       className={`${styles.btn} ${isExtended ? styles.active : ''}`}
       onClick={() => onChange(isExtended ? 1 : 0)}
-      title={isExtended ? 'Showing pre & post market — click for regular hours only' : 'Regular hours only — click to include pre & post market'}
+      title={isExtended ? 'Extended hours ON — click for regular hours only' : 'Regular hours only — click to include pre & post market'}
     >
-      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
         {/* Clock icon */}
         <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.3"/>
         <path d="M7 4v3l2 1.5" stroke="currentColor" strokeWidth="1.3"
           strokeLinecap="round" strokeLinejoin="round"/>
         {/* Extended hours indicator bars */}
         {isExtended && (
-          <>
-            <path d="M1 7H0M14 7h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
-          </>
+          <path d="M1 7H0M14 7h-1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
         )}
       </svg>
-      <span>{isExtended ? 'Ext. Hours' : 'RTH'}</span>
     </button>
   );
 }

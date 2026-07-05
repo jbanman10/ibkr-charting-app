@@ -17,6 +17,7 @@ import ChartPanel from './components/Chart/ChartPanel';
 import ResizableGrid from './components/Grid/ResizableGrid';
 import LayoutPicker from './components/Grid/LayoutPicker';
 import StatusBar from './components/StatusBar';
+import MarketSummary from './components/MarketSummary/MarketSummary';
 import styles from './App.module.css';
 
 const AUTOSAVE_MS = 5_000;
@@ -27,6 +28,7 @@ export default function App() {
     () => loadLayout().panels[0]?.id ?? ''
   );
   const [activeTool, setActiveTool] = useState<DrawingToolType>('none');
+  const [showSummary, setShowSummary] = useState(false);
   const layoutRef = useRef(layout);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
 
@@ -48,11 +50,12 @@ export default function App() {
   const routeBar = useCallback((
     ev: '__barUpdateHandler' | '__barCloseHandler',
     symbol: string,
-    bar: Bar
+    bar: Bar,
+    tf: Timeframe
   ) => {
     for (const p of layoutRef.current.panels) {
       const el = document.getElementById(`chart-panel-${p.id}`);
-      (el as any)?.[ev]?.(symbol, bar);
+      (el as any)?.[ev]?.(symbol, bar, tf);
     }
   }, []);
 
@@ -64,8 +67,8 @@ export default function App() {
   }, []);
 
   const { status, ibkrConnected, subscribe, unsubscribe } = useMarketStream({
-    onBarUpdate: useCallback((sym: string, bar: Bar, _tf: Timeframe) => routeBar('__barUpdateHandler', sym, bar), [routeBar]),
-    onBarClose:  useCallback((sym: string, bar: Bar, _tf: Timeframe) => routeBar('__barCloseHandler',  sym, bar), [routeBar]),
+    onBarUpdate: useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barUpdateHandler', sym, bar, tf), [routeBar]),
+    onBarClose:  useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barCloseHandler',  sym, bar, tf), [routeBar]),
     onTick:      useCallback((tick: Tick) => {
       // Drive live candle movement.
       routeTick(tick);
@@ -154,6 +157,20 @@ export default function App() {
         <div className={styles.toolbarRight}>
           <button
             className={styles.iconBtn}
+            onClick={() => setShowSummary(true)}
+            title="Morning market summary"
+          >
+            {/* sunrise icon */}
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+              <path d="M1.5 10.5h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+              <path d="M4 10.5a3 3 0 0 1 6 0" stroke="currentColor" strokeWidth="1.3"/>
+              <path d="M7 1.5v2M2.4 4.9l1.4 1.4M11.6 4.9l-1.4 1.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+            </svg>
+            <span>Summary</span>
+          </button>
+
+          <button
+            className={styles.iconBtn}
             onClick={() => saveLayout(layoutRef.current)}
             title="Save layout"
           >
@@ -207,6 +224,9 @@ export default function App() {
           ))}
         </ResizableGrid>
       </div>
+
+      {/* ── Morning summary popup ───────────────────────────────────── */}
+      {showSummary && <MarketSummary onClose={() => setShowSummary(false)} />}
 
       {/* ── Status bar ──────────────────────────────────────────────── */}
       <StatusBar

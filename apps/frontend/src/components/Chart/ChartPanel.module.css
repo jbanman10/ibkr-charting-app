@@ -24,10 +24,10 @@
 .panelToolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 8px;
+  gap: 4px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0 6px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
@@ -114,55 +114,6 @@
 }
 
 /* ─── Floating indicator panel ──────────────────────────────────────────── */
-
-/* ─── Selected-drawing options bar ──────────────────────────────────────── */
-
-.drawingOptions {
-  position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-muted);
-  border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-  z-index: 30;
-}
-
-.swatchRow {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.swatch {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  border: 1px solid rgba(255,255,255,0.25);
-  cursor: pointer;
-  padding: 0;
-}
-
-.swatch:hover { transform: scale(1.15); }
-
-.optBtn {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-secondary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 5px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-.optBtn:hover { color: var(--text-primary); background: var(--bg-base); }
-.optActive { color: var(--accent); border-color: var(--accent); background: var(--accent-glow); }
 
 .indicatorOverlay {
   position: absolute;
