@@ -154,4 +154,5 @@ export interface IndicatorConfig {
   period: number;
   color: string;
   visible: boolean;
+  lineWidth?: number; // 1–4, default 1
 }

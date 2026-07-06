@@ -68,15 +68,19 @@ export function appendEMA(
 export type IndicatorSeries = {
   key: string; // e.g. "SMA-20", "EMA-50"
   data: LineData[];
+  color?: string;
+  lineWidth?: number;
 };
 
 export function computeIndicators(
   bars: Bar[],
-  configs: Array<{ type: 'SMA' | 'EMA'; period: number }>,
+  configs: Array<{ type: 'SMA' | 'EMA'; period: number; color?: string; lineWidth?: number }>,
   timeframe = '1d'
 ): IndicatorSeries[] {
   return configs.map((cfg) => ({
     key: `${cfg.type}-${cfg.period}`,
     data: cfg.type === 'SMA' ? calcSMA(bars, cfg.period, timeframe) : calcEMA(bars, cfg.period, timeframe),
+    color: cfg.color,
+    lineWidth: cfg.lineWidth,
   }));
 }

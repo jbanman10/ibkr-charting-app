@@ -15,6 +15,7 @@ import ChartContainer, { type ChartHandle, type SessionLevelLine } from './Chart
 import PriceDisplay from './PriceDisplay';
 import IndicatorPanel from './IndicatorPanel';
 import DrawingSettings from './DrawingSettings';
+import IndicatorSettings from './IndicatorSettings';
 import SymbolSearch from '../Toolbar/SymbolSearch';
 import TimeframeSelector from '../Toolbar/TimeframeSelector';
 import DrawingToolbar from '../Toolbar/DrawingToolbar';
@@ -427,6 +428,40 @@ export default function ChartPanel({
 
   const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId) ?? null;
 
+  // Indicator settings card, opened by double-clicking an MA line. Keyed by
+  // "TYPE-period" (the same key the chart series use).
+  const [indicatorSettingsKey, setIndicatorSettingsKey] = useState<string | null>(null);
+  const settingsIndicator = indicatorSettingsKey
+    ? panel.indicators.find((i) => `${i.type}-${i.period}` === indicatorSettingsKey) ?? null
+    : null;
+
+  const updateSettingsIndicator = useCallback((patch: Partial<IndicatorConfig>) => {
+    if (!indicatorSettingsKey) return;
+    onPanelChange({
+      indicators: panel.indicators.map((i) =>
+        `${i.type}-${i.period}` === indicatorSettingsKey ? { ...i, ...patch } : i
+      ),
+    });
+  }, [indicatorSettingsKey, panel.indicators, onPanelChange]);
+
+  const removeSettingsIndicator = useCallback(() => {
+    if (!indicatorSettingsKey) return;
+    onPanelChange({
+      indicators: panel.indicators.filter((i) => `${i.type}-${i.period}` !== indicatorSettingsKey),
+    });
+    setIndicatorSettingsKey(null);
+  }, [indicatorSettingsKey, panel.indicators, onPanelChange]);
+
+  // Escape closes the indicator settings card.
+  useEffect(() => {
+    if (!indicatorSettingsKey) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIndicatorSettingsKey(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [indicatorSettingsKey]);
+
   // Backspace/Delete removes the highlighted drawing; Escape deselects. Scoped to
   // the focused panel and ignored while typing in inputs.
   useEffect(() => {
@@ -542,7 +577,15 @@ export default function ChartPanel({
             setSelectedDrawingId(id);
             if (id === null) setShowDrawingSettings(false); // clicked empty chart
           }}
-          onDrawingOpenSettings={(id) => { setSelectedDrawingId(id); setShowDrawingSettings(true); }}
+          onDrawingOpenSettings={(id) => {
+            setSelectedDrawingId(id);
+            setShowDrawingSettings(true);
+            setIndicatorSettingsKey(null);
+          }}
+          onIndicatorOpenSettings={(key) => {
+            setIndicatorSettingsKey(key);
+            setShowDrawingSettings(false);
+          }}
           rectColor={{ border: rectColor.border, fill: rectColor.fill }}
           dataTimeRange={dataTimeRange}
           onReady={handleChartReady}
@@ -555,6 +598,15 @@ export default function ChartPanel({
             onChange={updateSelectedDrawing}
             onDelete={deleteSelectedDrawing}
             onClose={() => setShowDrawingSettings(false)}
+          />
+        )}
+
+        {settingsIndicator && (
+          <IndicatorSettings
+            indicator={settingsIndicator}
+            onChange={updateSettingsIndicator}
+            onRemove={removeSettingsIndicator}
+            onClose={() => setIndicatorSettingsKey(null)}
           />
         )}
 
