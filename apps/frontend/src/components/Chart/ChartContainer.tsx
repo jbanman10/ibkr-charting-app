@@ -118,6 +118,7 @@ export interface SessionLevelLine {
   color: string;
   title: string; // axis label
   solid?: boolean; // solid line (PDH/PDL); dashed otherwise
+  lineWidth?: number; // 1–4, default 1
 }
 
 export interface ChartHandle {
@@ -142,6 +143,7 @@ interface Props {
   onDrawingSelect?: (id: string | null) => void;
   onDrawingOpenSettings?: (id: string) => void;
   onIndicatorOpenSettings?: (key: string) => void;
+  onSessionLevelOpenSettings?: (key: string) => void;
   rectColor?: { border: string; fill: string };
   dataTimeRange?: DataTimeRange | null;
   onReady?: () => void;
@@ -151,7 +153,7 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const ChartContainer = forwardRef<ChartHandle, Props>(
-  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
+  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -437,7 +439,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         const opts = {
           price: l.price,
           color: l.color,
-          lineWidth: 1 as const,
+          lineWidth: Math.min(4, Math.max(1, l.lineWidth ?? 1)) as 1 | 2 | 3 | 4,
           lineStyle: l.solid ? LineStyle.Solid : LineStyle.Dashed,
           axisLabelVisible: true,
           title: l.title,
@@ -492,10 +494,29 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       return bestDist <= TOL ? bestKey : null;
     }, []);
 
+    // Which session price line (PDH/PDL/PMH/…) sits within a few pixels of the
+    // point. Price lines are horizontal, so it's a plain vertical distance.
+    const hitTestSessionLevels = useCallback((pt: { x: number; y: number }): string | null => {
+      const candle = candleRef.current;
+      if (!candle) return null;
+      const TOL = 6;
+      let bestKey: string | null = null;
+      let bestDist = TOL + 1;
+      for (const [key, line] of priceLinesRef.current) {
+        const y = candle.priceToCoordinate(line.options().price);
+        if (y == null) continue;
+        const d = Math.abs(pt.y - y);
+        if (d < bestDist) { bestDist = d; bestKey = key; }
+      }
+      return bestDist <= TOL ? bestKey : null;
+    }, []);
+
     const handleDblClickMiss = useCallback((pt: { x: number; y: number }) => {
-      const key = hitTestIndicators(pt);
-      if (key) onIndicatorOpenSettings?.(key);
-    }, [hitTestIndicators, onIndicatorOpenSettings]);
+      const indKey = hitTestIndicators(pt);
+      if (indKey) { onIndicatorOpenSettings?.(indKey); return; }
+      const lvlKey = hitTestSessionLevels(pt);
+      if (lvlKey) onSessionLevelOpenSettings?.(lvlKey);
+    }, [hitTestIndicators, hitTestSessionLevels, onIndicatorOpenSettings, onSessionLevelOpenSettings]);
 
     useImperativeHandle(ref, () => ({
       setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd,

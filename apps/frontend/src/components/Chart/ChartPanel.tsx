@@ -10,12 +10,13 @@ import { seedDrawings, getDrawings } from '../../lib/drawingStore';
 import { computeIndicators } from '../../lib/indicators';
 import { computeSessionLevels, computeSessionRegions, etParts, classify } from '../../lib/sessions';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
-import type { SessionOverlays } from '../../lib/layout';
+import type { SessionOverlays, SessionLevelStyle } from '../../lib/layout';
 import ChartContainer, { type ChartHandle, type SessionLevelLine } from './ChartContainer';
 import PriceDisplay from './PriceDisplay';
 import IndicatorPanel from './IndicatorPanel';
 import DrawingSettings from './DrawingSettings';
 import IndicatorSettings from './IndicatorSettings';
+import SessionLevelSettings from './SessionLevelSettings';
 import SymbolSearch from '../Toolbar/SymbolSearch';
 import TimeframeSelector from '../Toolbar/TimeframeSelector';
 import DrawingToolbar from '../Toolbar/DrawingToolbar';
@@ -25,25 +26,49 @@ import styles from './ChartPanel.module.css';
 // Session overlays only make sense on fine-grained intraday timeframes.
 const INTRADAY_TF: ReadonlySet<string> = new Set(['1m', '5m', '15m', '30m', '1h']);
 
+// Default look + overlay group for each session level. Single source of truth
+// for both line building and the double-click settings card.
+const LEVEL_META: Record<string, {
+  title: string; color: string; dashed: boolean; group: keyof SessionOverlays;
+}> = {
+  PDH: { title: 'Prev Day High',      color: SESSION_COLORS.prevDayHigh,  dashed: false, group: 'prevDayHL' },
+  PDL: { title: 'Prev Day Low',       color: SESSION_COLORS.prevDayLow,   dashed: false, group: 'prevDayHL' },
+  PMH: { title: 'Pre-market High',    color: SESSION_COLORS.premarket,    dashed: true,  group: 'premarketHL' },
+  PML: { title: 'Pre-market Low',     color: SESSION_COLORS.premarket,    dashed: true,  group: 'premarketHL' },
+  ORH: { title: 'Opening Range High', color: SESSION_COLORS.openingRange, dashed: true,  group: 'openingRange' },
+  ORL: { title: 'Opening Range Low',  color: SESSION_COLORS.openingRange, dashed: true,  group: 'openingRange' },
+};
+
 function buildSessionLines(
   levels: ReturnType<typeof computeSessionLevels>,
-  ov: SessionOverlays
+  ov: SessionOverlays,
+  styles?: Record<string, SessionLevelStyle>
 ): SessionLevelLine[] {
   const out: SessionLevelLine[] = [];
-  const push = (key: string, price: number | null, color: string, title: string, solid = false) => {
-    if (price != null) out.push({ key, price, color, title, solid });
+  const push = (key: string, price: number | null) => {
+    if (price == null) return;
+    const meta = LEVEL_META[key];
+    const st = styles?.[key];
+    out.push({
+      key,
+      price,
+      title: key,
+      color: st?.color ?? meta.color,
+      solid: !(st?.dashed ?? meta.dashed),
+      lineWidth: st?.lineWidth ?? 1,
+    });
   };
   if (ov.prevDayHL) {
-    push('PDH', levels.prevDayHigh, SESSION_COLORS.prevDayHigh, 'PDH', true);
-    push('PDL', levels.prevDayLow, SESSION_COLORS.prevDayLow, 'PDL', true);
+    push('PDH', levels.prevDayHigh);
+    push('PDL', levels.prevDayLow);
   }
   if (ov.premarketHL) {
-    push('PMH', levels.premarketHigh, SESSION_COLORS.premarket, 'PMH');
-    push('PML', levels.premarketLow, SESSION_COLORS.premarket, 'PML');
+    push('PMH', levels.premarketHigh);
+    push('PML', levels.premarketLow);
   }
   if (ov.openingRange) {
-    push('ORH', levels.orHigh, SESSION_COLORS.openingRange, 'ORH');
-    push('ORL', levels.orLow, SESSION_COLORS.openingRange, 'ORL');
+    push('ORH', levels.orHigh);
+    push('ORL', levels.orLow);
   }
   return out;
 }
@@ -124,9 +149,9 @@ export default function ChartPanel({
     if (forming && Number(forming.time) > Number(bars[bars.length - 1].time)) {
       bars = [...bars, forming];
     }
-    handle.setSessionLevels(buildSessionLines(computeSessionLevels(bars), ov));
+    handle.setSessionLevels(buildSessionLines(computeSessionLevels(bars), ov, panel.sessionLevelStyles));
     handle.setSessionRegions(ov.shading ? computeSessionRegions(bars) : []);
-  }, [panel.timeframe, panel.sessionOverlays]);
+  }, [panel.timeframe, panel.sessionOverlays, panel.sessionLevelStyles]);
 
   const loadBarsIntoChart = useCallback((currentBars: Bar[]) => {
     if (!chartRef.current || !currentBars.length) return;
@@ -452,15 +477,41 @@ export default function ChartPanel({
     setIndicatorSettingsKey(null);
   }, [indicatorSettingsKey, panel.indicators, onPanelChange]);
 
-  // Escape closes the indicator settings card.
+  // Session level settings card (PDH/PDL/PMH/PML/ORH/ORL), opened by
+  // double-clicking the price line on the chart.
+  const [sessionLevelKey, setSessionLevelKey] = useState<string | null>(null);
+  const sessionLevelMeta = sessionLevelKey ? LEVEL_META[sessionLevelKey] : null;
+  const sessionLevelStyle = sessionLevelKey ? panel.sessionLevelStyles?.[sessionLevelKey] : undefined;
+
+  const updateSessionLevel = useCallback((patch: SessionLevelStyle) => {
+    if (!sessionLevelKey) return;
+    onPanelChange({
+      sessionLevelStyles: {
+        ...panel.sessionLevelStyles,
+        [sessionLevelKey]: { ...panel.sessionLevelStyles?.[sessionLevelKey], ...patch },
+      },
+    });
+  }, [sessionLevelKey, panel.sessionLevelStyles, onPanelChange]);
+
+  const hideSessionLevel = useCallback(() => {
+    if (!sessionLevelKey) return;
+    const group = LEVEL_META[sessionLevelKey].group;
+    onPanelChange({ sessionOverlays: { ...panel.sessionOverlays, [group]: false } });
+    setSessionLevelKey(null);
+  }, [sessionLevelKey, panel.sessionOverlays, onPanelChange]);
+
+  // Escape closes whichever floating settings card is open.
   useEffect(() => {
-    if (!indicatorSettingsKey) return;
+    if (!indicatorSettingsKey && !sessionLevelKey) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIndicatorSettingsKey(null);
+      if (e.key === 'Escape') {
+        setIndicatorSettingsKey(null);
+        setSessionLevelKey(null);
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [indicatorSettingsKey]);
+  }, [indicatorSettingsKey, sessionLevelKey]);
 
   // Backspace/Delete removes the highlighted drawing; Escape deselects. Scoped to
   // the focused panel and ignored while typing in inputs.
@@ -581,10 +632,18 @@ export default function ChartPanel({
             setSelectedDrawingId(id);
             setShowDrawingSettings(true);
             setIndicatorSettingsKey(null);
+            setSessionLevelKey(null);
           }}
           onIndicatorOpenSettings={(key) => {
             setIndicatorSettingsKey(key);
             setShowDrawingSettings(false);
+            setSessionLevelKey(null);
+          }}
+          onSessionLevelOpenSettings={(key) => {
+            if (!LEVEL_META[key]) return; // unknown price line
+            setSessionLevelKey(key);
+            setShowDrawingSettings(false);
+            setIndicatorSettingsKey(null);
           }}
           rectColor={{ border: rectColor.border, fill: rectColor.fill }}
           dataTimeRange={dataTimeRange}
@@ -607,6 +666,19 @@ export default function ChartPanel({
             onChange={updateSettingsIndicator}
             onRemove={removeSettingsIndicator}
             onClose={() => setIndicatorSettingsKey(null)}
+          />
+        )}
+
+        {sessionLevelKey && sessionLevelMeta && (
+          <SessionLevelSettings
+            levelKey={sessionLevelKey}
+            title={sessionLevelMeta.title}
+            color={sessionLevelStyle?.color ?? sessionLevelMeta.color}
+            lineWidth={sessionLevelStyle?.lineWidth ?? 1}
+            dashed={sessionLevelStyle?.dashed ?? sessionLevelMeta.dashed}
+            onChange={updateSessionLevel}
+            onHide={hideSessionLevel}
+            onClose={() => setSessionLevelKey(null)}
           />
         )}
 
