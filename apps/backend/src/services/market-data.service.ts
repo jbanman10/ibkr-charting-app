@@ -49,11 +49,34 @@ interface ActiveStream {
   onBar: OnBarCallback;
   onTick: OnTickCallback;
   aggregator: BarAggregator;
+  // Wall-clock timer that rolls the forming bar / flat-fills quiet minutes even
+  // when no 5-sec bar arrives (illiquid names). Cleared on unsubscribe.
+  fillTimer?: ReturnType<typeof setInterval>;
+  // Cached "is this bucket inside the stream's trading session" predicate.
+  inSession: (sec: number) => boolean;
 }
 
-// Minimum gap between history-reconcile fetches per symbol|timeframe. Keeps the
-// extra requests well under IBKR's ~60-per-10-min historical pacing budget.
-const RECONCILE_MIN_MS = 90_000;
+// Minimum gap between per-close correction fetches per symbol|timeframe. Small
+// enough that a freshly-closed bar is verified within seconds, large enough to
+// coalesce the burst when flat-fill closes several buckets at once and stay
+// well under IBKR's ~60-per-10-min historical pacing budget (real closes are
+// ≥60 s apart per symbol, so this never blocks a legit close).
+const CORRECT_MIN_MS = 20_000;
+
+// How many consecutive empty minutes we're willing to synthesize as flat
+// continuation candles before giving up and letting the deep re-sync refill
+// (guards against fabricating a huge run after sleep/backgrounding).
+const MAX_FLAT_FILL = 20;
+
+// Grace (seconds) before the wall-clock timer rolls a bucket, so a late 5-sec
+// bar for the just-ended minute still lands in the right candle.
+const ROLL_GRACE_SEC = 3;
+
+/** Result of advancing/merging the aggregator: buckets that closed + the live bar. */
+interface AggResult {
+  closed: Bar[];
+  forming: Bar | null; // non-null only when a new forming bar was opened
+}
 
 // ─── 5-sec bar → target-timeframe aggregator ────────────────────────────────
 
@@ -65,39 +88,80 @@ class BarAggregator {
     this.barSeconds = TIMEFRAMES[timeframe].seconds;
   }
 
-  /** Returns [bar, isClosed]. isClosed = true when the bar window rolled over. */
-  push(fiveSecBar: {
-    time: number;
-    open: number;
-    high: number;
-    low: number;
-    close: number;
-    volume: number;
-  }): [Bar, boolean] {
-    const barTime = Math.floor(fiveSecBar.time / this.barSeconds) * this.barSeconds;
+  /**
+   * Roll the forming bar forward to `nowSec` using the wall clock, WITHOUT any
+   * new trade data. Closes the current bar if its window has elapsed and fills
+   * each fully-elapsed empty bucket with a flat continuation candle
+   * (open=high=low=close=prevClose, volume=0) — the way TWS/TradingView keep a
+   * candle for every minute even with no trades. `inSession(bucketSec)` gates
+   * fill to the stream's trading hours; large or boundary-crossing gaps reset
+   * the aggregator so prime/reconcile reseed instead of fabricating a long run.
+   */
+  advanceTo(nowSec: number, inSession: (sec: number) => boolean): AggResult {
+    if (!this.currentBar) return { closed: [], forming: null };
+    const cur = this.currentBar;
+    const nowBucket = Math.floor(nowSec / this.barSeconds) * this.barSeconds;
+    if (nowBucket <= cur.time) return { closed: [], forming: null }; // still forming
 
-    if (!this.currentBar || this.currentBar.time !== barTime) {
-      // New bar window — close the old one and start fresh
-      const closed = this.currentBar ? ({ ...this.currentBar } as Bar) : null;
-      this.currentBar = {
-        time: barTime,
-        open: fiveSecBar.open,
-        high: fiveSecBar.high,
-        low: fiveSecBar.low,
-        close: fiveSecBar.close,
-        volume: fiveSecBar.volume,
-      };
-      if (closed) return [closed, true];
-      return [{ ...this.currentBar }, false];
+    const closed: Bar[] = [{ ...cur }]; // the real bar's window has ended
+    const prevClose = cur.close;
+
+    const empties: number[] = [];
+    for (let t = cur.time + this.barSeconds; t < nowBucket; t += this.barSeconds) empties.push(t);
+
+    // Too far, or the gap leaves session (overnight/weekend/lunch-halt) → don't
+    // invent candles; drop the forming bar and let history refill.
+    if (empties.length > MAX_FLAT_FILL || empties.some((t) => !inSession(t)) || !inSession(nowBucket)) {
+      this.currentBar = null;
+      return { closed, forming: null };
     }
 
-    // Same bar window — update OHLCV
-    this.currentBar.high = Math.max(this.currentBar.high, fiveSecBar.high);
-    this.currentBar.low = Math.min(this.currentBar.low, fiveSecBar.low);
-    this.currentBar.close = fiveSecBar.close;
-    this.currentBar.volume += fiveSecBar.volume;
+    for (const t of empties) {
+      closed.push({ time: t, open: prevClose, high: prevClose, low: prevClose, close: prevClose, volume: 0 });
+    }
+    this.currentBar = { time: nowBucket, open: prevClose, high: prevClose, low: prevClose, close: prevClose, volume: 0 };
+    return { closed, forming: { ...this.currentBar } };
+  }
 
-    return [{ ...this.currentBar }, false];
+  /**
+   * Merge a live 5-sec bar. First flushes any buckets that ended before this
+   * bar (flat-filling quiet minutes), then folds the bar into the current
+   * bucket. Returns the closed bars plus the (always present) forming bar.
+   */
+  push(
+    fiveSecBar: { time: number; open: number; high: number; low: number; close: number; volume: number },
+    inSession: (sec: number) => boolean
+  ): AggResult {
+    const barTime = Math.floor(fiveSecBar.time / this.barSeconds) * this.barSeconds;
+    const { closed } = this.advanceTo(fiveSecBar.time, inSession);
+
+    if (!this.currentBar || barTime > this.currentBar.time) {
+      // Brand-new bucket (or reset by a large gap) — the 5s bar defines it.
+      this.currentBar = {
+        time: barTime,
+        open: fiveSecBar.open, high: fiveSecBar.high,
+        low: fiveSecBar.low, close: fiveSecBar.close, volume: fiveSecBar.volume,
+      };
+    } else if (barTime === this.currentBar.time) {
+      if (this.currentBar.volume === 0) {
+        // Current bucket was a flat synthetic placeholder — the first real trade
+        // defines the true open/range (TWS opens at first print, not prevClose).
+        this.currentBar = {
+          time: barTime,
+          open: fiveSecBar.open, high: fiveSecBar.high,
+          low: fiveSecBar.low, close: fiveSecBar.close, volume: fiveSecBar.volume,
+        };
+      } else {
+        this.currentBar.high = Math.max(this.currentBar.high, fiveSecBar.high);
+        this.currentBar.low = Math.min(this.currentBar.low, fiveSecBar.low);
+        this.currentBar.close = fiveSecBar.close;
+        this.currentBar.volume += fiveSecBar.volume;
+      }
+    }
+    // barTime < currentBar.time → stale late 5s bar for an already-closed bucket;
+    // ignore it (the value is already reflected in the closed bar / reconcile).
+
+    return { closed, forming: { ...this.currentBar! } };
   }
 
   /** Bucket start time of the currently-forming bar, or null before the first push. */
@@ -228,6 +292,12 @@ export class MarketDataService {
           );
         }
       }
+      // Intraday: fill short in-session gaps with flat continuation candles so the
+      // chart is continuous like TWS/TradingView, and so the live flat-fill and
+      // the 3-min deep re-sync agree (a full re-render won't flicker gaps back).
+      if (timeframe !== '1d' && timeframe !== '1w') {
+        return MarketDataService.fillIntradayGaps(bars, useRTH, tf.seconds);
+      }
       return bars;
     });
     const advance = () => this.delay(HIST_SPACING_MS);
@@ -237,6 +307,34 @@ export class MarketDataService {
 
   private delay(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  /**
+   * Insert flat continuation candles (open=high=low=close=prevClose, volume=0)
+   * for missing in-session minutes, matching how TWS/TradingView keep a candle
+   * for every bar. Only short gaps are filled (≤ MAX_FLAT_FILL buckets, both
+   * ends in session); overnight / halt / weekend gaps are left as-is. Assumes
+   * ascending, bar-aligned times.
+   */
+  private static fillIntradayGaps(bars: Bar[], useRTH: 0 | 1, barSeconds: number): Bar[] {
+    if (bars.length < 2) return bars;
+    const inSession = MarketDataService.sessionPredicate(useRTH);
+    const out: Bar[] = [];
+    for (let i = 0; i < bars.length; i++) {
+      out.push(bars[i]);
+      if (i === bars.length - 1) break;
+      const curT = Number(bars[i].time);
+      const nextT = Number(bars[i + 1].time);
+      const gap = (nextT - curT) / barSeconds;
+      // Contiguous, irregular, or too large (lunch halt / overnight) → don't fill.
+      if (!Number.isInteger(gap) || gap <= 1 || gap > MAX_FLAT_FILL + 1) continue;
+      const prevClose = bars[i].close;
+      for (let t = curT + barSeconds; t < nextT; t += barSeconds) {
+        if (!inSession(t)) continue;
+        out.push({ time: t, open: prevClose, high: prevClose, low: prevClose, close: prevClose, volume: 0 });
+      }
+    }
+    return out;
   }
 
   /**
@@ -442,7 +540,7 @@ export class MarketDataService {
 
     const reqId = this.streamReqId++;
 
-    this.activeStreams.set(reqId, {
+    const stream: ActiveStream = {
       reqId,
       symbol: contract.symbol ?? '',
       timeframe,
@@ -451,7 +549,17 @@ export class MarketDataService {
       onBar,
       onTick,
       aggregator: new BarAggregator(timeframe),
-    });
+      inSession: MarketDataService.sessionPredicate(useRTH),
+    };
+    this.activeStreams.set(reqId, stream);
+
+    // Wall-clock roll: every second, advance the forming bar so quiet minutes get
+    // flat continuation candles and the next candle opens on time even if no 5s
+    // bar arrives. Skipped for daily/weekly (they roll once/day; harmless but
+    // pointless). A small grace lets late 5s bars land in the right bucket.
+    if (timeframe !== '1d' && timeframe !== '1w') {
+      stream.fillTimer = setInterval(() => this.tickFill(reqId), 1_000);
+    }
 
     this.logger.info(
       { reqId, symbol: contract.symbol, timeframe, useRTH },
@@ -478,6 +586,35 @@ export class MarketDataService {
     this.primeStream(reqId, contract, timeframe, useRTH);
 
     return () => this.unsubscribe(reqId);
+  }
+
+  /** Predicate: is a bucket's start time inside this stream's trading session? */
+  private static sessionPredicate(useRTH: 0 | 1): (sec: number) => boolean {
+    // ET minute-of-day windows: RTH 09:30–16:00, extended 04:00–20:00.
+    const [lo, hi] = useRTH === 1 ? [570, 960] : [240, 1200];
+    return (sec: number) => {
+      const m = MarketDataService.etMinuteOfDay(sec);
+      return m >= lo && m < hi;
+    };
+  }
+
+  /**
+   * Wall-clock tick (once/sec per stream): roll the forming bar forward with no
+   * new trades, emitting flat continuation candles for quiet minutes. Emits any
+   * closed bars + the freshly opened forming bar, and triggers a fast correction
+   * so the just-closed bar is verified against official history within seconds.
+   */
+  private tickFill(reqId: number): void {
+    const stream = this.activeStreams.get(reqId);
+    if (!stream) return;
+    // Subtract the grace so we don't roll a bucket the instant it ends — a late
+    // 5s bar for the last few seconds of the minute must still land in it.
+    const nowSec = Date.now() / 1000 - ROLL_GRACE_SEC;
+    const { closed, forming } = stream.aggregator.advanceTo(nowSec, stream.inSession);
+    if (!closed.length && !forming) return;
+    for (const b of closed) stream.onBar(b, true);
+    if (forming) stream.onBar(forming, false);
+    if (closed.length) this.reconcileStream(stream);
   }
 
   /**
@@ -529,15 +666,17 @@ export class MarketDataService {
     this.histChain = this.histChain.then(run, run).then(advance, advance);
   }
 
-  // Tracks the last reconcile per symbol|timeframe so several panels on the
+  // Tracks the last correction per symbol|timeframe so several panels on the
   // same chart don't multiply the request volume.
   private lastReconcile = new Map<string, number>();
 
   /**
-   * Re-fetch the last few OFFICIAL bars for a stream and re-emit them as closed
-   * bars. The live aggregate (5s RT bars) can permanently miss prints that only
-   * appear in IBKR's historical data — the reason candles sometimes differed
-   * from TWS until a manual refresh. Throttled and run through the pacing queue.
+   * Re-fetch the last couple of OFFICIAL bars for a stream and re-emit them as
+   * closed bars. The live 5s aggregate can permanently miss prints that only
+   * appear in IBKR's historical data (odd lots, late reports) — the reason
+   * candles differed from TWS until a manual refresh. Triggered on every bucket
+   * close so a freshly-closed bar settles to the official value within seconds;
+   * a short per-key floor coalesces bursts and respects IBKR pacing.
    */
   private reconcileStream(stream: ActiveStream): void {
     const { timeframe, contract, useRTH, reqId } = stream;
@@ -545,28 +684,32 @@ export class MarketDataService {
 
     const key = `${stream.symbol}|${timeframe}`;
     const now = Date.now();
-    if (now - (this.lastReconcile.get(key) ?? 0) < RECONCILE_MIN_MS) return;
+    if (now - (this.lastReconcile.get(key) ?? 0) < CORRECT_MIN_MS) return;
     this.lastReconcile.set(key, now);
 
     const run = async () => {
       if (!this.activeStreams.has(reqId)) return;
       try {
         const tf = TIMEFRAMES[timeframe];
-        // Enough history to cover everything since the previous reconcile.
-        const durSec = Math.min(Math.max(tf.seconds * 6, RECONCILE_MIN_MS / 1000 + tf.seconds * 2), 86400);
+        // Just the last few bars — enough to catch the freshly-closed one plus a
+        // little overlap, without a heavy fetch on every minute.
+        const durSec = Math.min(Math.max(tf.seconds * 3, 180), 86400);
         const bars = await this.runHistoricalRequest(contract, tf.barSize, `${Math.ceil(durSec)} S`, useRTH);
 
         const live = this.activeStreams.get(reqId);
         if (!live || !bars.length) return;
 
-        // Only correct bars strictly older than the forming bucket — the forming
-        // bar is owned by the live aggregator (and tick painting on the client).
+        // Correct every returned bar EXCEPT the one still forming — that bucket
+        // is owned by the live aggregator (and tick painting on the client).
+        // The just-closed bar is older than formingTime, so it IS corrected.
         const formingTime = live.aggregator.currentTime;
+        let corrected = 0;
         for (const b of bars) {
           if (formingTime != null && Number(b.time) >= formingTime) continue;
           live.onBar(b, true);
+          corrected++;
         }
-        this.logger.debug({ reqId, symbol: stream.symbol, timeframe }, 'Reconciled recent bars');
+        this.logger.debug({ reqId, symbol: stream.symbol, timeframe, corrected }, 'Corrected recent bars');
       } catch (err) {
         this.logger.warn(
           { reqId, err: err instanceof Error ? err.message : String(err) },
@@ -580,7 +723,9 @@ export class MarketDataService {
   }
 
   private unsubscribe(reqId: number): void {
-    if (!this.activeStreams.has(reqId)) return;
+    const stream = this.activeStreams.get(reqId);
+    if (!stream) return;
+    if (stream.fillTimer) clearInterval(stream.fillTimer);
     this.activeStreams.delete(reqId);
     try {
       this.ibkr.api.cancelRealTimeBars(reqId);
@@ -653,12 +798,18 @@ export class MarketDataService {
         const stream = this.activeStreams.get(reqId);
         if (!stream) return;
 
-        const [bar, isClosed] = stream.aggregator.push({ time, open, high, low, close, volume });
-        stream.onBar(bar, isClosed);
-        // A bucket just closed from live 5s bars. RT bars can miss prints that
-        // official history includes (late reports, odd lots — common after
-        // hours), so periodically re-fetch the recent bars and re-emit them.
-        if (isClosed) this.reconcileStream(stream);
+        // Merge the 5s bar; this flat-fills any quiet minutes since the last bar,
+        // emits their closes, then the (always-present) forming bar.
+        const { closed, forming } = stream.aggregator.push(
+          { time, open, high, low, close, volume },
+          stream.inSession
+        );
+        for (const b of closed) stream.onBar(b, true);
+        if (forming) stream.onBar(forming, false);
+        // A bucket just closed. RT bars can miss prints that official history
+        // includes (late reports, odd lots), so verify the just-closed bar
+        // against history right away (throttled per symbol|timeframe).
+        if (closed.length) this.reconcileStream(stream);
       }
     );
 

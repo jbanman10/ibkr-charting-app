@@ -85,6 +85,8 @@ interface Props {
   ibkrConnected: boolean;
   isFocused: boolean;
   onFocus: () => void;
+  isMaximized: boolean;
+  onToggleMaximize: () => void;
 }
 
 export default function ChartPanel({
@@ -99,6 +101,8 @@ export default function ChartPanel({
   ibkrConnected,
   isFocused,
   onFocus,
+  isMaximized,
+  onToggleMaximize,
 }: Props) {
   const chartRef = useRef<ChartHandle>(null);
   const barsRef = useRef<Bar[]>([]);
@@ -541,11 +545,22 @@ export default function ChartPanel({
 
   const displayData = bars.length > 0 ? bars[bars.length - 1] : null;
 
+  // Alt+click anywhere on the panel maximizes it to fill the grid (alt+click
+  // again restores) — like TradingView. Caught in the capture phase so it beats
+  // the drawing canvas / chart click handlers and works even with a tool active.
+  const handlePointerDownCapture = useCallback((e: React.PointerEvent) => {
+    if (!e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleMaximize();
+  }, [onToggleMaximize]);
+
   return (
     <div
       id={`chart-panel-${panel.id}`}
       className={`${styles.panel} ${isFocused ? styles.focused : ''}`}
-      onClick={onFocus}
+      onClick={(e) => { if (e.altKey) return; onFocus(); }}
+      onPointerDownCapture={handlePointerDownCapture}
     >
       {/* ── Panel toolbar ─────────────────────────────────────────────── */}
       <div className={styles.panelToolbar}>
@@ -583,6 +598,21 @@ export default function ChartPanel({
               <rect x="1.5" y="1.5" width="11" height="11" rx="1.5" stroke="currentColor" strokeWidth="1.3"/>
               <path d="M4.5 9.5V5.5H8.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
             </svg>
+          </button>
+          <button
+            className={`${styles.actionBtn} ${isMaximized ? styles.actionActive : ''}`}
+            onClick={(e) => { e.stopPropagation(); onToggleMaximize(); }}
+            title={isMaximized ? 'Restore to grid (Alt+click)' : 'Maximize panel (Alt+click)'}
+          >
+            {isMaximized ? (
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                <path d="M8.5 1.5v4h4M5.5 12.5v-4h-4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            ) : (
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+                <path d="M9 1.5h3.5V5M5 12.5H1.5V9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
           </button>
           {canClose && (
             <button

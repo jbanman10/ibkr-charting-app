@@ -16,6 +16,17 @@
   flex-direction: column;
 }
 
+/* One panel blown up to fill the whole grid (Alt+click / maximize button). */
+.cellMaximized {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+}
+
+.cellHidden {
+  display: none;
+}
+
 /* ─── Column resizer ───────────────────────────────────────────────────────── */
 
 .resizerCol {

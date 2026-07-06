@@ -9,17 +9,21 @@ interface Props {
   onColumnResize: (sizes: number[]) => void;
   onRowResize: (sizes: number[]) => void;
   children: ReactNode[];
+  /** When set, that child fills the whole grid and the others are hidden. */
+  maximizedIndex?: number | null;
 }
 
-export default function ResizableGrid({ layout, preset, onColumnResize, onRowResize, children }: Props) {
+export default function ResizableGrid({ layout, preset, onColumnResize, onRowResize, children, maximizedIndex = null }: Props) {
   const gridRef      = useRef<HTMLDivElement>(null);
   const colHandleRef = useRef<HTMLDivElement>(null);
   const rowHandleRef = useRef<HTMLDivElement>(null);
 
+  const isMaximized = maximizedIndex != null;
   // Draggable splitters only support a single 2-track split per axis. Grids with
   // 3+ tracks (e.g. the 2×3 grid) render as equal tracks without a splitter.
-  const hasColSplit = preset.columns.length === 2;
-  const hasRowSplit = preset.rows.length === 2;
+  // Hidden entirely while a panel is maximized.
+  const hasColSplit = preset.columns.length === 2 && !isMaximized;
+  const hasRowSplit = preset.rows.length === 2 && !isMaximized;
   const colPct = layout.columnSizes[0] ?? 50;
   const rowPct = layout.rowSizes[0] ?? 50;
 
@@ -85,11 +89,20 @@ export default function ResizableGrid({ layout, preset, onColumnResize, onRowRes
         gridTemplateRows:    buildGridRows(preset, layout.rowSizes),
       }}
     >
-      {preset.areaNames.map((area, i) => (
-        <div key={area} className={styles.cell} style={{ gridArea: area }}>
-          {children[i]}
-        </div>
-      ))}
+      {preset.areaNames.map((area, i) => {
+        const cls = !isMaximized
+          ? styles.cell
+          : i === maximizedIndex
+            ? `${styles.cell} ${styles.cellMaximized}`
+            : styles.cellHidden;
+        // While maximized, drop the gridArea so the filled cell isn't constrained
+        // to its track and hidden cells don't reserve space.
+        return (
+          <div key={area} className={cls} style={isMaximized ? undefined : { gridArea: area }}>
+            {children[i]}
+          </div>
+        );
+      })}
 
       {hasColSplit && (
         <div
