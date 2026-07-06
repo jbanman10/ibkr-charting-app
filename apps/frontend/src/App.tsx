@@ -29,6 +29,7 @@ export default function App() {
   );
   const [activeTool, setActiveTool] = useState<DrawingToolType>('none');
   const [showSummary, setShowSummary] = useState(false);
+  const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
   const layoutRef = useRef(layout);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
 
@@ -78,12 +79,26 @@ export default function App() {
   // ─── Layout switching ──────────────────────────────────────────────────────
 
   const handlePresetChange = useCallback((presetId: GridPresetId) => {
+    setMaximizedPanelId(null); // a fresh preset invalidates any maximized panel
     setLayout((l) => {
       const next = switchPreset(l, presetId);
       setFocusedPanelId(next.panels[0]?.id ?? '');
       return next;
     });
   }, []);
+
+  const toggleMaximize = useCallback((id: string) => {
+    setMaximizedPanelId((cur) => (cur === id ? null : id));
+    setFocusedPanelId(id);
+  }, []);
+
+  // Escape restores a maximized panel to the grid.
+  useEffect(() => {
+    if (!maximizedPanelId) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMaximizedPanelId(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [maximizedPanelId]);
 
   const handlePanelChange = useCallback((id: string, updates: Partial<PanelConfig>) => {
     setLayout((l) => updatePanel(l, id, updates));
@@ -100,6 +115,7 @@ export default function App() {
   const handleReset = useCallback(() => {
     if (!confirm('Reset layout? All panels and drawings will be cleared.')) return;
     const fresh = defaultLayout();
+    setMaximizedPanelId(null);
     setLayout(fresh);
     setFocusedPanelId(fresh.panels[0]?.id ?? '');
     saveLayout(fresh);
@@ -109,6 +125,8 @@ export default function App() {
 
   const preset = GRID_PRESETS[layout.presetId];
   const focusedPanel = layout.panels.find((p) => p.id === focusedPanelId);
+  const maxIdx = maximizedPanelId ? layout.panels.findIndex((p) => p.id === maximizedPanelId) : -1;
+  const maximizedIndex = maxIdx >= 0 ? maxIdx : null;
 
   return (
     <div className={styles.root}>
@@ -205,6 +223,7 @@ export default function App() {
           preset={preset}
           onColumnResize={handleColumnResize}
           onRowResize={handleRowResize}
+          maximizedIndex={maximizedIndex}
         >
           {layout.panels.map((panel) => (
             <ChartPanel
@@ -220,6 +239,8 @@ export default function App() {
               ibkrConnected={ibkrConnected}
               isFocused={focusedPanelId === panel.id}
               onFocus={() => setFocusedPanelId(panel.id)}
+              isMaximized={maximizedPanelId === panel.id}
+              onToggleMaximize={() => toggleMaximize(panel.id)}
             />
           ))}
         </ResizableGrid>
