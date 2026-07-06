@@ -19,11 +19,12 @@ const SESSION_TOGGLES: Array<{ key: keyof SessionOverlays; label: string; color:
 ];
 
 const PRESETS: Array<{ type: 'SMA' | 'EMA'; period: number }> = [
+  { type: 'EMA', period: 9 },
+  { type: 'EMA', period: 20 },
+  { type: 'EMA', period: 50 },
   { type: 'SMA', period: 20 },
   { type: 'SMA', period: 50 },
   { type: 'SMA', period: 200 },
-  { type: 'EMA', period: 20 },
-  { type: 'EMA', period: 50 },
 ];
 
 export default function IndicatorPanel({ indicators, onChange, sessionOverlays, onSessionOverlaysChange }: Props) {
@@ -66,7 +67,7 @@ export default function IndicatorPanel({ indicators, onChange, sessionOverlays, 
           const key = `${type}-${period}`;
           const active = indicators.find((i) => `${i.type}-${i.period}` === key);
           const isOn = active?.visible ?? false;
-          const color = indicatorColors[key] ?? '#8a95a8';
+          const color = active?.color ?? indicatorColors[key] ?? '#8a95a8';
           return (
             <button
               key={key}

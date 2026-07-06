@@ -74,6 +74,7 @@ export const volumeTheme = {
 };
 
 export const indicatorColors: Record<string, string> = {
+  'EMA-9':  '#e879f9',
   'SMA-20': '#f0b429',
   'SMA-50': '#a78bfa',
   'SMA-200':'#fb923c',

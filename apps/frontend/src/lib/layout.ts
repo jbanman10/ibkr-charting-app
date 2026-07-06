@@ -141,6 +141,13 @@ export const DEFAULT_SESSION_OVERLAYS: SessionOverlays = {
   shading: true,
 };
 
+/** Style overrides for one session level line (PDH/PDL/PMH/PML/ORH/ORL). */
+export interface SessionLevelStyle {
+  color?: string;
+  lineWidth?: number; // 1–4
+  dashed?: boolean;
+}
+
 export interface PanelConfig {
   id: string;
   symbol: string;
@@ -152,6 +159,8 @@ export interface PanelConfig {
   drawings: Drawing[];
   useRTH: 0 | 1;
   sessionOverlays: SessionOverlays;
+  // Keyed by level ('PDH', 'PML', …); absent = theme defaults.
+  sessionLevelStyles?: Record<string, SessionLevelStyle>;
 }
 
 // ─── Layout config ────────────────────────────────────────────────────────────

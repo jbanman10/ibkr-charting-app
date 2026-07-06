@@ -46,6 +46,8 @@ interface Props {
   onDrawingComplete?: () => void;
   onSelect?: (id: string | null) => void;
   onOpenSettings?: (id: string) => void;
+  /** Double-click that hit no drawing — lets the chart check indicator lines. */
+  onDblClickMiss?: (pt: { x: number; y: number }) => void;
   selectedId?: string | null;
   onDragChange?: (id: string | null) => void;
   rectColor?: { border: string; fill: string };
@@ -114,6 +116,7 @@ export default function DrawingCanvas({
   onDrawingComplete,
   onSelect,
   onOpenSettings,
+  onDblClickMiss,
   selectedId = null,
   onDragChange,
   rectColor,
@@ -410,10 +413,11 @@ export default function DrawingCanvas({
           return;
         }
       }
+      onDblClickMiss?.(pt); // no drawing here — maybe an indicator line
     };
     el.addEventListener('dblclick', onDbl);
     return () => el.removeEventListener('dblclick', onDbl);
-  }, [chart, priceSeries, dataTimeRange, width, activeTool, onSelect, onOpenSettings]);
+  }, [chart, priceSeries, dataTimeRange, width, activeTool, onSelect, onOpenSettings, onDblClickMiss]);
 
   // Hover detection over the selected drawing, so we know when to make the canvas
   // interactive (vs. letting pans pass through). Uses the chart crosshair event,

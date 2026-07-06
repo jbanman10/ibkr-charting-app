@@ -26,6 +26,7 @@ import type { SessionRegion } from '../../lib/sessions';
 import { SessionShadingPrimitive } from '../../lib/sessionShadingPrimitive';
 import { DrawingsPrimitive } from '../../lib/drawingsPrimitive';
 import { etTickMarkFormatter, etCrosshairFormatter } from '../../lib/chartTime';
+import { indicatorColors } from '../../lib/chartTheme';
 import DrawingCanvas, { type DrawingToolType } from './DrawingCanvas';
 
 // ─── Time conversion ──────────────────────────────────────────────────────────
@@ -117,6 +118,7 @@ export interface SessionLevelLine {
   color: string;
   title: string; // axis label
   solid?: boolean; // solid line (PDH/PDL); dashed otherwise
+  lineWidth?: number; // 1–4, default 1
 }
 
 export interface ChartHandle {
@@ -140,6 +142,8 @@ interface Props {
   onDrawingsChange?: (d: Drawing[]) => void;
   onDrawingSelect?: (id: string | null) => void;
   onDrawingOpenSettings?: (id: string) => void;
+  onIndicatorOpenSettings?: (key: string) => void;
+  onSessionLevelOpenSettings?: (key: string) => void;
   rectColor?: { border: string; fill: string };
   dataTimeRange?: DataTimeRange | null;
   onReady?: () => void;
@@ -149,7 +153,7 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const ChartContainer = forwardRef<ChartHandle, Props>(
-  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
+  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -392,21 +396,17 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         if (!incoming.has(key)) { chart.removeSeries(line); existing.delete(key); }
       }
 
-      const COLORS: Record<string, string> = {
-        'SMA-20': '#f0b429', 'SMA-50': '#a78bfa', 'SMA-200': '#fb923c',
-        'EMA-20': '#34d399', 'EMA-50': '#60a5fa', 'EMA-200': '#f472b6',
-      };
-
-      for (const { key, data } of series) {
-        if (!existing.has(key)) {
-          existing.set(key, chart.addLineSeries({
-            color: COLORS[key] ?? '#8a95a8',
-            lineWidth: 1,
-            priceLineVisible: false,
-            lastValueVisible: false,
-            crosshairMarkerVisible: false,
-          }));
-        }
+      for (const { key, data, color, lineWidth } of series) {
+        const opts = {
+          color: color ?? indicatorColors[key] ?? '#8a95a8',
+          lineWidth: Math.min(4, Math.max(1, lineWidth ?? 1)) as 1 | 2 | 3 | 4,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false,
+        };
+        const line = existing.get(key);
+        if (!line) existing.set(key, chart.addLineSeries(opts));
+        else line.applyOptions(opts); // live color/width changes from the settings card
         try {
           // De-dupe by time (keep latest) + sort, matching the candle setData path.
           // Live bar_close merges can briefly duplicate a time in barsRef and
@@ -439,7 +439,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         const opts = {
           price: l.price,
           color: l.color,
-          lineWidth: 1 as const,
+          lineWidth: Math.min(4, Math.max(1, l.lineWidth ?? 1)) as 1 | 2 | 3 | 4,
           lineStyle: l.solid ? LineStyle.Solid : LineStyle.Dashed,
           axisLabelVisible: true,
           title: l.title,
@@ -464,6 +464,60 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const fitContent  = useCallback(() => chartRef.current?.timeScale().fitContent(), []);
     const scrollToEnd = useCallback(() => chartRef.current?.timeScale().scrollToRealTime(), []);
 
+    // Which indicator line (if any) passes within a few pixels of the point.
+    // Walks each line's visible points and measures vertical distance to the
+    // segment spanning the click's x — cheap enough for a double-click.
+    const hitTestIndicators = useCallback((pt: { x: number; y: number }): string | null => {
+      const chart = chartRef.current;
+      if (!chart) return null;
+      const ts = chart.timeScale();
+      const TOL = 6;
+      let bestKey: string | null = null;
+      let bestDist = TOL + 1;
+
+      for (const [key, series] of linesRef.current) {
+        let prev: { x: number; y: number } | null = null;
+        for (const p of series.data() as LineData[]) {
+          const cx = ts.timeToCoordinate(p.time);
+          if (cx == null) { prev = null; continue; } // offscreen
+          const cy = series.priceToCoordinate(p.value);
+          if (cy == null) { prev = null; continue; }
+          if (prev && prev.x <= pt.x && pt.x <= cx) {
+            const t = (pt.x - prev.x) / Math.max(1e-9, cx - prev.x);
+            const d = Math.abs(pt.y - (prev.y + t * (cy - prev.y)));
+            if (d < bestDist) { bestDist = d; bestKey = key; }
+          }
+          if (cx > pt.x) break; // walked past the click; next line
+          prev = { x: cx, y: cy };
+        }
+      }
+      return bestDist <= TOL ? bestKey : null;
+    }, []);
+
+    // Which session price line (PDH/PDL/PMH/…) sits within a few pixels of the
+    // point. Price lines are horizontal, so it's a plain vertical distance.
+    const hitTestSessionLevels = useCallback((pt: { x: number; y: number }): string | null => {
+      const candle = candleRef.current;
+      if (!candle) return null;
+      const TOL = 6;
+      let bestKey: string | null = null;
+      let bestDist = TOL + 1;
+      for (const [key, line] of priceLinesRef.current) {
+        const y = candle.priceToCoordinate(line.options().price);
+        if (y == null) continue;
+        const d = Math.abs(pt.y - y);
+        if (d < bestDist) { bestDist = d; bestKey = key; }
+      }
+      return bestDist <= TOL ? bestKey : null;
+    }, []);
+
+    const handleDblClickMiss = useCallback((pt: { x: number; y: number }) => {
+      const indKey = hitTestIndicators(pt);
+      if (indKey) { onIndicatorOpenSettings?.(indKey); return; }
+      const lvlKey = hitTestSessionLevels(pt);
+      if (lvlKey) onSessionLevelOpenSettings?.(lvlKey);
+    }, [hitTestIndicators, hitTestSessionLevels, onIndicatorOpenSettings, onSessionLevelOpenSettings]);
+
     useImperativeHandle(ref, () => ({
       setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd,
     }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd]);
@@ -478,6 +532,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
           onDrawingComplete={onDrawingComplete}
           onSelect={onDrawingSelect}
           onOpenSettings={onDrawingOpenSettings}
+          onDblClickMiss={handleDblClickMiss}
           selectedId={selectedDrawingId}
           onDragChange={setDraggingId}
           rectColor={rectColor}
