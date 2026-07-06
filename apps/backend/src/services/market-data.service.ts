@@ -201,6 +201,32 @@ export class MarketDataService {
             bars.push(today); // IBKR omitted today entirely
           }
         }
+      } else if (useRTH === 0) {
+        // Extended-hours TRADES bars include stale away-from-market prints
+        // (overnight/OTC trades batch-reported when the tape opens at 4:00 ET),
+        // which put fake $1+ wicks on the 4:00–4:15 candles and corrupt the
+        // pre-market H/L levels. TWS filters these from its charts; the API
+        // doesn't. Clamp each outside-RTH bar to that minute's NBBO range
+        // (BID_ASK bars: high = max ask, low = min bid) to match TWS. Runs in
+        // the same queue slot, so pacing is respected; a quotes failure never
+        // blocks the bars themselves.
+        try {
+          const quotes = await this.runHistoricalRequest(
+            contract, tf.barSize, tf.durationStr, 0, WhatToShow.BID_ASK
+          );
+          const fixed = MarketDataService.sanitizeExtendedBars(bars, quotes);
+          if (fixed > 0) {
+            this.logger.info(
+              { symbol: contract.symbol, timeframe, fixed },
+              'Clamped stale extended-hours prints to NBBO'
+            );
+          }
+        } catch (err) {
+          this.logger.warn(
+            { symbol: contract.symbol, err: err instanceof Error ? err.message : err },
+            'BID_ASK sanitize fetch failed; serving unfiltered bars'
+          );
+        }
       }
       return bars;
     });
@@ -211,6 +237,62 @@ export class MarketDataService {
 
   private delay(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
+  }
+
+  /**
+   * Clamp outside-RTH trade bars to their bar's NBBO range (from BID_ASK bars:
+   * high = max ask, low = min bid). Extended-hours trades must execute inside
+   * the consolidated quote, so anything beyond it (plus a small tolerance) is a
+   * stale/late report — replace it with the nearest genuinely quoted price.
+   * RTH bars are left untouched (auction crosses can print off the continuous
+   * quote, and RTH prints are already NBBO-protected). Mutates in place;
+   * returns how many bars were adjusted.
+   */
+  private static sanitizeExtendedBars(bars: Bar[], quotes: Bar[]): number {
+    const quoteByTime = new Map<number, Bar>();
+    for (const q of quotes) quoteByTime.set(Number(q.time), q);
+
+    let fixed = 0;
+    for (const b of bars) {
+      const t = Number(b.time);
+      const m = MarketDataService.etMinuteOfDay(t);
+      if (m >= 570 && m < 960) continue; // RTH bar
+
+      const q = quoteByTime.get(t);
+      if (!q) continue;
+      const maxAsk = q.high;
+      const minBid = q.low;
+      if (!(minBid > 0) || !(maxAsk >= minBid)) continue; // unusable quote bar
+
+      // Tolerance: a few cents / 5 bps so borderline prints aren't mangled.
+      const eps = Math.max(0.05, ((maxAsk + minBid) / 2) * 0.0005);
+      const lo = minBid - eps;
+      const hi = maxAsk + eps;
+      const clamp = (v: number) => (v < lo ? minBid : v > hi ? maxAsk : v);
+
+      const open = clamp(b.open);
+      const close = clamp(b.close);
+      const high = clamp(b.high);
+      const low = clamp(b.low);
+      if (open === b.open && close === b.close && high === b.high && low === b.low) continue;
+
+      b.open = open;
+      b.close = close;
+      b.high = Math.max(open, close, high);
+      b.low = Math.min(open, close, low);
+      fixed++;
+    }
+    return fixed;
+  }
+
+  private static readonly ET_HM = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  });
+
+  /** ET minute-of-day (0–1439) for a UTC epoch-seconds timestamp. */
+  private static etMinuteOfDay(unixSec: number): number {
+    const [h, m] = MarketDataService.ET_HM.format(unixSec * 1000).split(':').map(Number);
+    return h * 60 + m;
   }
 
   /** Aggregate today's (ET) intraday bars into a single daily OHLCV bar, or null. */
@@ -247,7 +329,8 @@ export class MarketDataService {
     contract: IBContract,
     barSize: string,
     durationStr: string,
-    useRTH: 0 | 1
+    useRTH: 0 | 1,
+    whatToShow: WhatToShow = WhatToShow.TRADES
   ): Promise<Bar[]> {
     return new Promise((resolve, reject) => {
       if (!this.ibkr.isConnected) {
@@ -332,7 +415,7 @@ export class MarketDataService {
         '',                    // endDateTime: '' = now
         durationStr,
         barSize as BarSizeSetting,
-        WhatToShow.TRADES,
+        whatToShow,
         useRTH,                // 0 = include extended hours, 1 = RTH only
         2,                     // formatDate: 2 = UTC epoch seconds (avoids exchange-tz skew;
                                //   matches the live tick time-base which uses Date.now() UTC)
