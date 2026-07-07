@@ -3,7 +3,6 @@ import type {
   WsServerMsg,
   WsClientMsg,
   Bar,
-  Tick,
   Timeframe,
   SecType,
 } from '@ibkr-chart/types';
@@ -15,9 +14,9 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 export type StreamStatus = 'connecting' | 'connected' | 'disconnected' | 'ibkr_down';
 
 export interface UseMarketStreamOptions {
+  onSnapshot?: (symbol: string, bars: Bar[], timeframe: Timeframe) => void;
   onBarUpdate?: (symbol: string, bar: Bar, timeframe: Timeframe) => void;
   onBarClose?: (symbol: string, bar: Bar, timeframe: Timeframe) => void;
-  onTick?: (tick: Tick) => void;
   onStatusChange?: (status: StreamStatus) => void;
 }
 
@@ -87,8 +86,8 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
 
       const o = optsRef.current;
       switch (msg.type) {
-        case 'tick':
-          o.onTick?.(msg.tick);
+        case 'snapshot':
+          o.onSnapshot?.(msg.symbol, msg.bars, msg.timeframe);
           break;
         case 'bar_update':
           o.onBarUpdate?.(msg.symbol, msg.bar, msg.timeframe);

@@ -1,14 +1,12 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import type { Bar, IndicatorConfig, Timeframe, ContractSearchResult, Tick } from '@ibkr-chart/types';
-import { TIMEFRAMES } from '@ibkr-chart/types';
+import type { Bar, IndicatorConfig, Timeframe, ContractSearchResult } from '@ibkr-chart/types';
 import type { PanelConfig } from '../../lib/layout';
 import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { DrawingToolType } from './DrawingCanvas';
-import { useHistoricalBars } from '../../hooks/useHistoricalBars';
 import { useSymbolDrawings } from '../../hooks/useSymbolDrawings';
 import { seedDrawings, getDrawings } from '../../lib/drawingStore';
 import { computeIndicators } from '../../lib/indicators';
-import { computeSessionLevels, computeSessionRegions, etParts, classify } from '../../lib/sessions';
+import { computeSessionLevels, computeSessionRegions } from '../../lib/sessions';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
 import type { SessionOverlays, SessionLevelStyle } from '../../lib/layout';
 import ChartContainer, { type ChartHandle, type SessionLevelLine } from './ChartContainer';
@@ -105,35 +103,13 @@ export default function ChartPanel({
   onToggleMaximize,
 }: Props) {
   const chartRef = useRef<ChartHandle>(null);
-  const barsRef = useRef<Bar[]>([]);
+  const barsRef = useRef<Bar[]>([]);            // closed bars — authoritative, straight from IBKR
   const chartReadyRef = useRef(false);
-  // Live (tick-by-tick) candle state
-  const currentBarRef = useRef<Bar | null>(null);          // the forming bar being painted
-  const quoteRef = useRef({ bid: 0, ask: 0, last: 0 });    // running quote (ticks are sparse)
-  const rafRef = useRef<number | null>(null);              // coalesces tick redraws to 1/frame
+  const formingRef = useRef<Bar | null>(null);  // current live (forming) bar
+  const gotSnapshotRef = useRef(false);         // has the initial snapshot arrived for this sub?
   const [showIndicators, setShowIndicators] = useState(false);
-
-  // Push the current forming bar to the chart, at most once per animation frame.
-  const scheduleLiveRedraw = useCallback(() => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      if (currentBarRef.current) chartRef.current?.updateBar(currentBarRef.current);
-    });
-  }, []);
-
-  useEffect(() => () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); }, []);
-
-  // ─── Historical data ──────────────────────────────────────────────────────
-
-  const { bars, loading, error } = useHistoricalBars(
-    panel.symbol,
-    panel.secType,
-    panel.exchange,
-    panel.currency,
-    panel.timeframe,
-    (panel.useRTH ?? 0) as 0 | 1
-  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // Recompute session levels + pre/post shading from the current bar history.
   // Intraday-only; clears the overlays on daily/weekly or when toggled off.
@@ -149,7 +125,7 @@ export default function ChartPanel({
     }
     // Include the live forming bar so the shading/levels extend to the newest
     // candle instead of lagging until the bar closes.
-    const forming = currentBarRef.current;
+    const forming = formingRef.current;
     if (forming && Number(forming.time) > Number(bars[bars.length - 1].time)) {
       bars = [...bars, forming];
     }
@@ -157,265 +133,114 @@ export default function ChartPanel({
     handle.setSessionRegions(ov.shading ? computeSessionRegions(bars) : []);
   }, [panel.timeframe, panel.sessionOverlays, panel.sessionLevelStyles]);
 
-  const loadBarsIntoChart = useCallback((currentBars: Bar[]) => {
-    if (!chartRef.current || !currentBars.length) return;
-    chartRef.current.setData(currentBars);
-    // Seed the live forming bar with the most recent historical bar so ticks have
-    // a base to paint onto before the first server bar_update arrives.
-    currentBarRef.current = { ...currentBars[currentBars.length - 1] };
+  const renderSnapshot = useCallback((snap: Bar[]) => {
+    if (!chartRef.current || !snap.length) return;
+    chartRef.current.setData(snap);
+    formingRef.current = { ...snap[snap.length - 1] };
     const active = panel.indicators.filter((i) => i.visible);
-    if (active.length) {
-      chartRef.current.setIndicators(computeIndicators(currentBars, active, panel.timeframe));
-    }
+    if (active.length) chartRef.current.setIndicators(computeIndicators(snap, active, panel.timeframe));
     recomputeSessions();
   }, [panel.indicators, panel.timeframe, recomputeSessions]);
 
   // Re-apply overlays when toggles or timeframe change (bars already loaded).
   useEffect(() => { recomputeSessions(); }, [recomputeSessions]);
 
-  // Called by ChartContainer once its lightweight-charts instance is created
+  // Called by ChartContainer once its lightweight-charts instance is created.
   const handleChartReady = useCallback(() => {
     chartReadyRef.current = true;
-    if (barsRef.current.length) loadBarsIntoChart(barsRef.current);
-  }, [loadBarsIntoChart]);
+    if (barsRef.current.length) renderSnapshot(barsRef.current);
+  }, [renderSnapshot]);
 
-  // Load bars into chart when they arrive (chart may already be ready)
-  useEffect(() => {
-    if (!bars.length) return;
-    barsRef.current = bars;
-    if (chartReadyRef.current) loadBarsIntoChart(bars);
-  }, [bars, loadBarsIntoChart]);
-
-  // Recompute indicators when config changes
+  // Recompute indicators when config changes.
   useEffect(() => {
     if (!chartRef.current || !barsRef.current.length) return;
     const active = panel.indicators.filter((i) => i.visible);
     chartRef.current.setIndicators(computeIndicators(barsRef.current, active, panel.timeframe));
   }, [panel.indicators, panel.timeframe]);
 
-  // Periodic deep re-sync with IBKR's official history — the automatic version
-  // of a manual refresh, with the viewport preserved. Needed because IBKR
-  // incorporates late trade reports into history minutes after the fact, so a
-  // bar (and levels derived from it, e.g. ORH/PMH) can be wrong long after the
-  // fast 90s backend reconcile stopped covering it. Panels are jittered so they
-  // don't burst the pacing queue in sync.
-  useEffect(() => {
-    if (!panel.symbol) return;
-    // ~1 min (jittered) so a level derived from a lossy live-built bar (e.g. a
-    // pre-market high the 5s stream missed) snaps back to IBKR's official value
-    // quickly, not minutes later. The per-close backend reconcile already fixes
-    // the most recent bars within seconds; this catches older ones.
-    const REFRESH_MS = 60_000 + Math.random() * 15_000;
-    const ctrl = new AbortController();
-
-    const timer = setInterval(async () => {
-      if (!chartReadyRef.current || !barsRef.current.length) return;
-      try {
-        const params = new URLSearchParams({
-          symbol: panel.symbol,
-          secType: panel.secType,
-          exchange: panel.exchange,
-          currency: panel.currency,
-          timeframe: panel.timeframe,
-          useRTH: String(panel.useRTH ?? 0),
-        });
-        const res = await fetch(`/api/bars?${params}`, { signal: ctrl.signal });
-        if (!res.ok) return;
-        const body = (await res.json()) as { bars?: Bar[] };
-        const official = body.bars ?? [];
-        if (official.length < 2) return;
-
-        barsRef.current = official;
-        // Keep the live forming bar on the end; buildSeries de-dupes by time
-        // keeping the later entry, so the forming bar wins over a partial
-        // last-history bucket.
-        const forming = currentBarRef.current;
-        const series = forming && Number(forming.time) >= Number(official[official.length - 1].time)
-          ? [...official, forming]
-          : official;
-        chartRef.current?.correctBars(series);
-        const active = panel.indicators.filter((i) => i.visible);
-        if (active.length) chartRef.current?.setIndicators(computeIndicators(official, active, panel.timeframe));
-        recomputeSessions();
-      } catch {
-        /* transient (abort/net) — next cycle retries */
-      }
-    }, REFRESH_MS);
-
-    return () => { ctrl.abort(); clearInterval(timer); };
-  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, panel.indicators, recomputeSessions]);
-
-  // ─── RT streaming subscription ────────────────────────────────────────────
+  // ─── Live subscription (keepUpToDate: snapshot + updates) ──────────────────
 
   useEffect(() => {
     if (!ibkrConnected || !panel.symbol) return;
+    // New subscription → reset to loading until the snapshot arrives.
+    setLoading(true);
+    setError(null);
+    gotSnapshotRef.current = false;
+    barsRef.current = [];
+    formingRef.current = null;
     subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1);
-    return () => unsubscribe(panel.symbol);
+    const t = setTimeout(() => {
+      if (!gotSnapshotRef.current) { setError('No data received'); setLoading(false); }
+    }, 30_000);
+    return () => { clearTimeout(t); unsubscribe(panel.symbol); };
   }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── RT bar handlers ──────────────────────────────────────────────────────
+  // ─── Stream handlers (snapshot / bar_update / bar_close) ───────────────────
+  //
+  // Bars come straight from IBKR's keepUpToDate feed (TWS-equivalent): the
+  // snapshot is authoritative history, bar_update is the live forming bar, and
+  // bar_close finalizes a bar (including late-print corrections to older bars).
 
-  const barUpdateRef = useRef((symbol: string, bar: Bar, _tf?: Timeframe) => {
-    if (symbol !== panel.symbol) return;
-    currentBarRef.current = { ...bar };
-    chartRef.current?.updateBar(bar);
-  });
-
-  const barCloseRef = useRef((symbol: string, bar: Bar, _tf?: Timeframe) => {
-    if (symbol !== panel.symbol) return;
-    const bars = barsRef.current;
-    const idx = bars.findIndex((b) => b.time === bar.time);
-    if (idx >= 0) bars[idx] = bar; else bars.push(bar);
-    barsRef.current = bars;
-    currentBarRef.current = { ...bar };
-    chartRef.current?.addBar(bar);
-    const active = panel.indicators.filter((i) => i.visible);
-    if (active.length) chartRef.current?.setIndicators(computeIndicators(bars, active, panel.timeframe));
-  });
-
-  // Paint each tick onto the forming candle (TradingView-style real-time movement).
-  // Assigned for real in the effect below (mirrors the bar handlers).
-  const tickHandlerRef = useRef<(symbol: string, tick: Tick) => void>(() => {});
-
-  const applyTick = useCallback((symbol: string, tick: Tick) => {
-    if (symbol !== panel.symbol) return;
-
-    // Ticks are sparse (one of last/bid/ask per message) — keep a running quote.
-    const q = quoteRef.current;
-    if (tick.last > 0) q.last = tick.last;
-    if (tick.bid > 0) q.bid = tick.bid;
-    if (tick.ask > 0) q.ask = tick.ask;
-
-    // Prefer the traded price; fall back to the bid/ask mid (forex/quiet markets).
-    const price = q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : 0);
-    const base = currentBarRef.current;
-    if (price <= 0 || !base) return;
-
-    // Daily/weekly candles are RTH-only (the backend fetches/streams them with
-    // useRTH=1) — don't let pre/post-market ticks extend today's candle either.
-    if (panel.timeframe === '1d' || panel.timeframe === '1w') {
-      const sec = Math.floor(tick.timestamp / 1000);
-      if (classify(etParts(sec).minuteOfDay) !== 'rth') return;
-    }
-
-    const tfSec = TIMEFRAMES[panel.timeframe].seconds;
-    const barTime = Math.floor((tick.timestamp / 1000) / tfSec) * tfSec;
-
-    if (barTime < Number(base.time)) return; // stale tick for an old bar
-
-    if (barTime > Number(base.time)) {
-      // New minute. During regular hours, open the candle flush with the previous
-      // candle's close so consecutive candles connect like TWS/TradingView (the
-      // server emits continuous bars too). In pre/post-market, open at the first
-      // trade so the genuine extended-hours gap shows (matches TradingView). The
-      // ~5s server bar_update then re-anchors OHLC; bar_close corrects the
-      // finished bar via correctBars — see barClose.
-      const rthNow = classify(etParts(barTime).minuteOfDay) === 'rth';
-      const rthPrev = classify(etParts(Number(base.time)).minuteOfDay) === 'rth';
-      const open = rthNow && rthPrev ? base.close : price;
-      currentBarRef.current = {
-        time: barTime,
-        open,
-        high: Math.max(open, price),
-        low: Math.min(open, price),
-        close: price,
-        volume: 0,
-      };
-    } else {
-      // Same window — move close, extend high/low provisionally. The next server
-      // bar_update re-anchors these to the real 5s aggregation.
-      base.close = price;
-      if (price > base.high) base.high = price;
-      if (price < base.low) base.low = price;
-    }
-    scheduleLiveRedraw();
-  }, [panel.symbol, panel.timeframe, scheduleLiveRedraw]);
+  const snapshotHandlerRef = useRef((_s: string, _b: Bar[], _t?: Timeframe) => {});
+  const barUpdateRef = useRef((_s: string, _b: Bar, _t?: Timeframe) => {});
+  const barCloseRef = useRef((_s: string, _b: Bar, _t?: Timeframe) => {});
 
   useEffect(() => {
+    snapshotHandlerRef.current = (symbol: string, snap: Bar[], tf?: Timeframe) => {
+      if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
+      gotSnapshotRef.current = true;
+      barsRef.current = snap;
+      formingRef.current = snap.length ? { ...snap[snap.length - 1] } : null;
+      if (chartReadyRef.current) renderSnapshot(snap);
+      setError(null);
+      setLoading(false);
+    };
+
     barUpdateRef.current = (symbol: string, bar: Bar, tf?: Timeframe) => {
-      if (symbol !== panel.symbol) return;
-      // Drop bars from another timeframe's subscription (stale messages during a
-      // TF switch would pollute the array — the source of daily-chart duplicate
-      // "asc ordered" errors).
-      if (tf && tf !== panel.timeframe) return;
-      const cur = currentBarRef.current;
-      if (cur && Number(bar.time) === Number(cur.time)) {
-        if (INTRADAY_TF.has(panel.timeframe)) {
-          // Trust the server's 5s-aggregated bar as the source of truth so any
-          // provisional tick wick is re-anchored to real trades on every update
-          // (~5s). Without this a stray tick print would inflate the candle and,
-          // because Math.max/min can only grow the range, it would persist until
-          // a manual refresh.
-          currentBarRef.current = { ...bar };
-        } else {
-          // Daily/weekly: keep the protective merge so a pre-prime partial update
-          // can't shrink the day's range back to the launch price. Sub-bar wick
-          // precision is irrelevant at this scale.
-          currentBarRef.current = {
-            time: cur.time,
-            open: cur.open,
-            high: Math.max(cur.high, bar.high),
-            low: Math.min(cur.low, bar.low),
-            close: bar.close,
-            volume: Math.max(cur.volume, bar.volume),
-          };
-        }
-      } else if (!cur || Number(bar.time) > Number(cur.time)) {
-        currentBarRef.current = { ...bar }; // a brand-new bar
-      } else {
-        return; // older than the current forming bar — ignore
-      }
-      chartRef.current?.updateBar(currentBarRef.current);
-      // Keep pre/post shading + levels tracking the live forming bar (~5s cadence).
+      if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
+      formingRef.current = { ...bar };
+      chartRef.current?.updateBar(bar);
       recomputeSessions();
     };
+
     barCloseRef.current = (symbol: string, bar: Bar, tf?: Timeframe) => {
-      if (symbol !== panel.symbol) return;
-      if (tf && tf !== panel.timeframe) return; // stale TF-switch message
+      if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
       const bars = barsRef.current;
       const idx = bars.findIndex((b) => Number(b.time) === Number(bar.time));
       if (idx >= 0) {
-        // Backend reconciliation re-emits recent official bars every ~90s; most
-        // match what's already on the chart — skip the re-render for those.
         const cur = bars[idx];
-        if (
-          cur.open === bar.open && cur.high === bar.high && cur.low === bar.low &&
-          cur.close === bar.close && cur.volume === bar.volume
-        ) return;
+        if (cur.open === bar.open && cur.high === bar.high && cur.low === bar.low &&
+            cur.close === bar.close && cur.volume === bar.volume) return; // unchanged re-emit
         bars[idx] = bar;
       } else {
         bars.push(bar);
       }
       barsRef.current = bars;
-      const cur = currentBarRef.current;
-      if (cur && Number(cur.time) > Number(bar.time)) {
-        // Ticks already opened a newer candle, so the closed bar is no longer the
-        // chart's last point — update() can't touch it. Re-render with the
-        // authoritative closed bar (preserving the viewport) and keep the live
-        // forming bar on the end.
-        chartRef.current?.correctBars([...bars, cur]);
+      const forming = formingRef.current;
+      if (forming && Number(forming.time) > Number(bar.time)) {
+        // Late correction to an older bar (no longer the chart's last point) —
+        // re-render preserving the viewport.
+        chartRef.current?.correctBars(bars);
       } else {
-        // Closed bar is still the last point — finalize it cheaply in place.
-        currentBarRef.current = { ...bar };
-        chartRef.current?.addBar(bar);
+        formingRef.current = { ...bar };
+        chartRef.current?.updateBar(bar);
       }
       const active = panel.indicators.filter((i) => i.visible);
       if (active.length) chartRef.current?.setIndicators(computeIndicators(bars, active, panel.timeframe));
       recomputeSessions();
     };
-    tickHandlerRef.current = applyTick;
-  }, [panel.symbol, panel.indicators, panel.timeframe, applyTick, recomputeSessions]);
+  }, [panel.symbol, panel.indicators, panel.timeframe, recomputeSessions, renderSnapshot]);
 
   useEffect(() => {
     const el = document.getElementById(`chart-panel-${panel.id}`);
     if (!el) return;
+    (el as any).__snapshotHandler  = (sym: string, b: Bar[], tf?: Timeframe) => snapshotHandlerRef.current(sym, b, tf);
     (el as any).__barUpdateHandler = (sym: string, bar: Bar, tf?: Timeframe) => barUpdateRef.current(sym, bar, tf);
     (el as any).__barCloseHandler  = (sym: string, bar: Bar, tf?: Timeframe) => barCloseRef.current(sym, bar, tf);
-    (el as any).__tickHandler      = (sym: string, tick: Tick) => tickHandlerRef.current(sym, tick);
     return () => {
+      (el as any).__snapshotHandler  = null;
       (el as any).__barUpdateHandler = null;
       (el as any).__barCloseHandler  = null;
-      (el as any).__tickHandler      = null;
     };
   }, [panel.id]);
 

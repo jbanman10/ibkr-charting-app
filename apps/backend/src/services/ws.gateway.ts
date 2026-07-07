@@ -15,7 +15,6 @@ import type {
   WsClientMsg,
   WsServerMsg,
   Bar,
-  Tick,
   Timeframe,
 } from '@ibkr-chart/types';
 import { IBKRService } from './ibkr.service.js';
@@ -128,6 +127,9 @@ export class WebSocketGateway {
       const unsubscribe = this.marketData.subscribeRealTime(
         contract,
         timeframe,
+        (bars: Bar[]) => {
+          this.send(ws, { type: 'snapshot', symbol, timeframe, bars });
+        },
         (bar: Bar, isClosed: boolean) => {
           this.send(ws, {
             type: isClosed ? 'bar_close' : 'bar_update',
@@ -135,9 +137,6 @@ export class WebSocketGateway {
             timeframe,
             bar,
           });
-        },
-        (tick: Tick) => {
-          this.send(ws, { type: 'tick', symbol, tick });
         },
         useRTH
       );
