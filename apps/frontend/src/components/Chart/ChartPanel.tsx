@@ -201,7 +201,11 @@ export default function ChartPanel({
   // don't burst the pacing queue in sync.
   useEffect(() => {
     if (!panel.symbol) return;
-    const REFRESH_MS = 180_000 + Math.random() * 30_000;
+    // ~1 min (jittered) so a level derived from a lossy live-built bar (e.g. a
+    // pre-market high the 5s stream missed) snaps back to IBKR's official value
+    // quickly, not minutes later. The per-close backend reconcile already fixes
+    // the most recent bars within seconds; this catches older ones.
+    const REFRESH_MS = 60_000 + Math.random() * 15_000;
     const ctrl = new AbortController();
 
     const timer = setInterval(async () => {
@@ -300,17 +304,20 @@ export default function ChartPanel({
     if (barTime < Number(base.time)) return; // stale tick for an old bar
 
     if (barTime > Number(base.time)) {
-      // New minute — open the candle flush with the previous candle's close so
-      // consecutive candles connect like TWS/TradingView (the server emits
-      // continuous bars too). The first tick still moves the close immediately;
-      // the ~5s server bar_update then re-anchors OHLC to real trades, and
-      // bar_close corrects the just-finished bar via correctBars — see barClose.
-      const prevClose = base.close;
+      // New minute. During regular hours, open the candle flush with the previous
+      // candle's close so consecutive candles connect like TWS/TradingView (the
+      // server emits continuous bars too). In pre/post-market, open at the first
+      // trade so the genuine extended-hours gap shows (matches TradingView). The
+      // ~5s server bar_update then re-anchors OHLC; bar_close corrects the
+      // finished bar via correctBars — see barClose.
+      const rthNow = classify(etParts(barTime).minuteOfDay) === 'rth';
+      const rthPrev = classify(etParts(Number(base.time)).minuteOfDay) === 'rth';
+      const open = rthNow && rthPrev ? base.close : price;
       currentBarRef.current = {
         time: barTime,
-        open: prevClose,
-        high: Math.max(prevClose, price),
-        low: Math.min(prevClose, price),
+        open,
+        high: Math.max(open, price),
+        low: Math.min(open, price),
         close: price,
         volume: 0,
       };
