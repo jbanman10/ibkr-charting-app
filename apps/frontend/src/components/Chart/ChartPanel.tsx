@@ -110,6 +110,10 @@ export default function ChartPanel({
   const [showIndicators, setShowIndicators] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Reactive mirror of barsRef for consumers that need to re-render (drawing
+  // clamp extent, OHLC display, drawing hit-testing). Updated on snapshot and
+  // on each bar close (~once/min), not on every live update.
+  const [bars, setBars] = useState<Bar[]>([]);
 
   // Recompute session levels + pre/post shading from the current bar history.
   // Intraday-only; clears the overlays on daily/weekly or when toggled off.
@@ -168,6 +172,7 @@ export default function ChartPanel({
     gotSnapshotRef.current = false;
     barsRef.current = [];
     formingRef.current = null;
+    setBars([]);
     subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1);
     const t = setTimeout(() => {
       if (!gotSnapshotRef.current) { setError('No data received'); setLoading(false); }
@@ -192,6 +197,7 @@ export default function ChartPanel({
       barsRef.current = snap;
       formingRef.current = snap.length ? { ...snap[snap.length - 1] } : null;
       if (chartReadyRef.current) renderSnapshot(snap);
+      setBars(snap);
       setError(null);
       setLoading(false);
     };
@@ -227,6 +233,7 @@ export default function ChartPanel({
       }
       const active = panel.indicators.filter((i) => i.visible);
       if (active.length) chartRef.current?.setIndicators(computeIndicators(bars, active, panel.timeframe));
+      setBars([...bars]); // reactive mirror for drawing extent / OHLC display
       recomputeSessions();
     };
   }, [panel.symbol, panel.indicators, panel.timeframe, recomputeSessions, renderSnapshot]);
