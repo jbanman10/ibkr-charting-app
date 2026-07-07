@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import type { Bar, IndicatorConfig, Timeframe, ContractSearchResult } from '@ibkr-chart/types';
+import type { Bar, IndicatorConfig, Timeframe, ContractSearchResult, Tick } from '@ibkr-chart/types';
 import type { PanelConfig } from '../../lib/layout';
 import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { DrawingToolType } from './DrawingCanvas';
@@ -107,6 +107,8 @@ export default function ChartPanel({
   const chartReadyRef = useRef(false);
   const formingRef = useRef<Bar | null>(null);  // current live (forming) bar
   const gotSnapshotRef = useRef(false);         // has the initial snapshot arrived for this sub?
+  const quoteRef = useRef({ bid: 0, ask: 0, last: 0 }); // running quote from sparse ticks
+  const rafRef = useRef<number | null>(null);           // coalesce tick repaints to 1/frame
   const [showIndicators, setShowIndicators] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -189,6 +191,37 @@ export default function ChartPanel({
   const snapshotHandlerRef = useRef((_s: string, _b: Bar[], _t?: Timeframe) => {});
   const barUpdateRef = useRef((_s: string, _b: Bar, _t?: Timeframe) => {});
   const barCloseRef = useRef((_s: string, _b: Bar, _t?: Timeframe) => {});
+  const tickHandlerRef = useRef((_s: string, _t: Tick) => {});
+
+  // Paint the forming candle from sub-second ticks between keepUpToDate updates.
+  // Provisional only — the next bar_update re-anchors OHLC to the exact TWS bar.
+  const applyTick = useCallback((symbol: string, tick: Tick) => {
+    if (symbol !== panel.symbol) return;
+    // Daily/weekly are RTH-only; don't let pre/post ticks drag the day's bar.
+    if (panel.timeframe === '1d' || panel.timeframe === '1w') return;
+    const q = quoteRef.current;
+    if (tick.last > 0) q.last = tick.last;
+    if (tick.bid > 0) q.bid = tick.bid;
+    if (tick.ask > 0) q.ask = tick.ask;
+    const price = q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : 0);
+    const base = formingRef.current;
+    if (price <= 0 || !base) return;
+    base.close = price;
+    if (price > base.high) base.high = price;
+    if (price < base.low) base.low = price;
+    if (rafRef.current == null) {
+      rafRef.current = requestAnimationFrame(() => {
+        rafRef.current = null;
+        if (formingRef.current) chartRef.current?.updateBar(formingRef.current);
+      });
+    }
+  }, [panel.symbol, panel.timeframe]);
+
+  useEffect(() => {
+    tickHandlerRef.current = applyTick;
+  }, [applyTick]);
+
+  useEffect(() => () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); }, []);
 
   useEffect(() => {
     snapshotHandlerRef.current = (symbol: string, snap: Bar[], tf?: Timeframe) => {
@@ -244,10 +277,12 @@ export default function ChartPanel({
     (el as any).__snapshotHandler  = (sym: string, b: Bar[], tf?: Timeframe) => snapshotHandlerRef.current(sym, b, tf);
     (el as any).__barUpdateHandler = (sym: string, bar: Bar, tf?: Timeframe) => barUpdateRef.current(sym, bar, tf);
     (el as any).__barCloseHandler  = (sym: string, bar: Bar, tf?: Timeframe) => barCloseRef.current(sym, bar, tf);
+    (el as any).__tickHandler      = (sym: string, tick: Tick) => tickHandlerRef.current(sym, tick);
     return () => {
       (el as any).__snapshotHandler  = null;
       (el as any).__barUpdateHandler = null;
       (el as any).__barCloseHandler  = null;
+      (el as any).__tickHandler      = null;
     };
   }, [panel.id]);
 

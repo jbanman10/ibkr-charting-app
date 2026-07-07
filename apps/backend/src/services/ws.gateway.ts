@@ -15,6 +15,7 @@ import type {
   WsClientMsg,
   WsServerMsg,
   Bar,
+  Tick,
   Timeframe,
 } from '@ibkr-chart/types';
 import { IBKRService } from './ibkr.service.js';
@@ -137,6 +138,9 @@ export class WebSocketGateway {
             timeframe,
             bar,
           });
+        },
+        (tick: Tick) => {
+          this.send(ws, { type: 'tick', symbol, tick });
         },
         useRTH
       );

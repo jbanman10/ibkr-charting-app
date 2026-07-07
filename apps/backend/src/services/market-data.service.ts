@@ -24,6 +24,7 @@ import {
 import type { Logger } from 'pino';
 import type {
   Bar,
+  Tick,
   Timeframe,
   ContractSearchResult,
   SecType,
@@ -34,10 +35,15 @@ import { config } from '../config.js';
 
 type OnBarCallback = (bar: Bar, isClosed: boolean) => void;
 type OnSnapshotCallback = (bars: Bar[]) => void;
+type OnTickCallback = (tick: Tick) => void;
 
 // Spacing between consecutive historical requests, to stay under IBKR's pacing
 // limits when several panels subscribe at once.
 const HIST_SPACING_MS = 150;
+
+// Offset added to a stream's reqId for its reqMktData (tick) channel, kept well
+// clear of the historical/stream/search reqId ranges.
+const TICK_REQID_OFFSET = 1_000_000;
 
 interface ActiveStream {
   reqId: number;
@@ -47,6 +53,7 @@ interface ActiveStream {
   useRTH: 0 | 1;
   onSnapshot: OnSnapshotCallback;
   onBar: OnBarCallback;
+  onTick: OnTickCallback;
   // Initial keepUpToDate batch accumulates here until the 'finished' marker.
   snapshotBars: Bar[];
   snapshotFinalizing: boolean; // 'finished' seen; clamp in flight, snapshot not yet sent
@@ -231,6 +238,7 @@ export class MarketDataService {
     timeframe: Timeframe,
     onSnapshot: OnSnapshotCallback,
     onBar: OnBarCallback,
+    onTick: OnTickCallback,
     useRTH: 0 | 1 = 1
   ): () => void {
     if (!this.ibkr.isConnected) throw new Error('IBKR not connected');
@@ -248,11 +256,21 @@ export class MarketDataService {
       useRTH,
       onSnapshot,
       onBar,
+      onTick,
       snapshotBars: [],
       snapshotFinalizing: false,
       snapshotDone: false,
       lastBar: null,
     });
+
+    // Sub-second last-price feed so the forming candle moves smoothly between
+    // the slower keepUpToDate bar updates (which stay the source of truth and
+    // re-anchor the bar to TWS-exact values each cadence).
+    try {
+      this.ibkr.api.reqMktData(reqId + TICK_REQID_OFFSET, contract, '', false, false, []);
+    } catch (err) {
+      this.logger.warn({ reqId, err: err instanceof Error ? err.message : String(err) }, 'reqMktData failed');
+    }
 
     // Issue the keepUpToDate request through the pacing queue so a burst of panel
     // subscriptions is spaced out. The persistent listeners in bindStreamEvents
@@ -304,6 +322,7 @@ export class MarketDataService {
     this.activeStreams.delete(reqId);
     try {
       this.ibkr.api.cancelHistoricalData(reqId);
+      this.ibkr.api.cancelMktData(reqId + TICK_REQID_OFFSET);
       this.logger.info({ reqId }, 'Unsubscribed (keepUpToDate)');
     } catch (err) {
       this.logger.warn({ err, reqId }, 'Error during unsubscribe');
@@ -390,6 +409,23 @@ export class MarketDataService {
           stream.onBar(bar, false);   // same forming bar (or the very first update)
           stream.lastBar = bar;
         }
+      }
+    );
+
+    // Sub-second bid/ask/last ticks — paint the forming candle between the slower
+    // keepUpToDate bar updates.
+    this.ibkr.api.on(
+      EventName.tickPrice,
+      (reqId: number, tickType: number, price: number) => {
+        const stream = this.activeStreams.get(reqId - TICK_REQID_OFFSET);
+        if (!stream || price <= 0) return;
+        // tickType: 1=bid, 2=ask, 4=last
+        const tick: Tick = { symbol: stream.symbol, timestamp: Date.now(), bid: 0, ask: 0, last: 0, volume: 0 };
+        if (tickType === 1) tick.bid = price;
+        else if (tickType === 2) tick.ask = price;
+        else if (tickType === 4) tick.last = price;
+        else return;
+        stream.onTick(tick);
       }
     );
   }

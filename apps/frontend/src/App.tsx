@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Bar, Timeframe } from '@ibkr-chart/types';
+import type { Bar, Tick, Timeframe } from '@ibkr-chart/types';
 import {
   loadLayout,
   saveLayout,
@@ -67,10 +67,18 @@ export default function App() {
     }
   }, []);
 
+  const routeTick = useCallback((tick: Tick) => {
+    for (const p of layoutRef.current.panels) {
+      const el = document.getElementById(`chart-panel-${p.id}`);
+      (el as any)?.__tickHandler?.(tick.symbol, tick);
+    }
+  }, []);
+
   const { status, ibkrConnected, subscribe, unsubscribe } = useMarketStream({
     onSnapshot:  useCallback((sym: string, bars: Bar[], tf: Timeframe) => routeSnapshot(sym, bars, tf), [routeSnapshot]),
     onBarUpdate: useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barUpdateHandler', sym, bar, tf), [routeBar]),
     onBarClose:  useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barCloseHandler',  sym, bar, tf), [routeBar]),
+    onTick:      useCallback((tick: Tick) => routeTick(tick), [routeTick]),
   });
 
   // ─── Layout switching ──────────────────────────────────────────────────────

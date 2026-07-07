@@ -3,6 +3,7 @@ import type {
   WsServerMsg,
   WsClientMsg,
   Bar,
+  Tick,
   Timeframe,
   SecType,
 } from '@ibkr-chart/types';
@@ -17,6 +18,7 @@ export interface UseMarketStreamOptions {
   onSnapshot?: (symbol: string, bars: Bar[], timeframe: Timeframe) => void;
   onBarUpdate?: (symbol: string, bar: Bar, timeframe: Timeframe) => void;
   onBarClose?: (symbol: string, bar: Bar, timeframe: Timeframe) => void;
+  onTick?: (tick: Tick) => void;
   onStatusChange?: (status: StreamStatus) => void;
 }
 
@@ -88,6 +90,9 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
       switch (msg.type) {
         case 'snapshot':
           o.onSnapshot?.(msg.symbol, msg.bars, msg.timeframe);
+          break;
+        case 'tick':
+          o.onTick?.(msg.tick);
           break;
         case 'bar_update':
           o.onBarUpdate?.(msg.symbol, msg.bar, msg.timeframe);
