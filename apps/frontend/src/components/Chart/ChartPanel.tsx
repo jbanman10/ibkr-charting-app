@@ -300,11 +300,20 @@ export default function ChartPanel({
     if (barTime < Number(base.time)) return; // stale tick for an old bar
 
     if (barTime > Number(base.time)) {
-      // New minute — open the candle immediately at the first trade so it doesn't
-      // lag the ~5s server bar. The server bar_update re-anchors this candle's
-      // OHLC to real trades, and bar_close corrects the just-finished bar (which
-      // is now no longer the chart's last point) via correctBars — see barClose.
-      currentBarRef.current = { time: barTime, open: price, high: price, low: price, close: price, volume: 0 };
+      // New minute — open the candle flush with the previous candle's close so
+      // consecutive candles connect like TWS/TradingView (the server emits
+      // continuous bars too). The first tick still moves the close immediately;
+      // the ~5s server bar_update then re-anchors OHLC to real trades, and
+      // bar_close corrects the just-finished bar via correctBars — see barClose.
+      const prevClose = base.close;
+      currentBarRef.current = {
+        time: barTime,
+        open: prevClose,
+        high: Math.max(prevClose, price),
+        low: Math.min(prevClose, price),
+        close: price,
+        volume: 0,
+      };
     } else {
       // Same window — move close, extend high/low provisionally. The next server
       // bar_update re-anchors these to the real 5s aggregation.

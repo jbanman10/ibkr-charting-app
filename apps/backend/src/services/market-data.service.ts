@@ -83,6 +83,11 @@ interface AggResult {
 class BarAggregator {
   private currentBar: Bar | null = null;
   private readonly barSeconds: number;
+  // Close of the most recently closed bar in this session. New buckets open at
+  // this value so consecutive intraday candles connect like TWS/TradingView
+  // (open == prev close). Reset to null across a session/overnight gap so we
+  // never snap the first bar of a new session back to the prior session.
+  private lastClose: number | null = null;
 
   constructor(timeframe: Timeframe) {
     this.barSeconds = TIMEFRAMES[timeframe].seconds;
@@ -110,15 +115,18 @@ class BarAggregator {
     for (let t = cur.time + this.barSeconds; t < nowBucket; t += this.barSeconds) empties.push(t);
 
     // Too far, or the gap leaves session (overnight/weekend/lunch-halt) → don't
-    // invent candles; drop the forming bar and let history refill.
+    // invent candles; drop the forming bar and break continuity so the next
+    // session's first bar keeps its real open.
     if (empties.length > MAX_FLAT_FILL || empties.some((t) => !inSession(t)) || !inSession(nowBucket)) {
       this.currentBar = null;
+      this.lastClose = null;
       return { closed, forming: null };
     }
 
     for (const t of empties) {
       closed.push({ time: t, open: prevClose, high: prevClose, low: prevClose, close: prevClose, volume: 0 });
     }
+    this.lastClose = prevClose; // consecutive within session → next opens at prev close
     this.currentBar = { time: nowBucket, open: prevClose, high: prevClose, low: prevClose, close: prevClose, volume: 0 };
     return { closed, forming: { ...this.currentBar } };
   }
@@ -136,20 +144,31 @@ class BarAggregator {
     const { closed } = this.advanceTo(fiveSecBar.time, inSession);
 
     if (!this.currentBar || barTime > this.currentBar.time) {
-      // Brand-new bucket (or reset by a large gap) — the 5s bar defines it.
+      // Brand-new bucket (or reset by a large gap). Open at the previous bar's
+      // close when we have one (continuous within session), else the 5s bar's
+      // real open (session start / first bar).
+      const open = this.lastClose ?? fiveSecBar.open;
       this.currentBar = {
         time: barTime,
-        open: fiveSecBar.open, high: fiveSecBar.high,
-        low: fiveSecBar.low, close: fiveSecBar.close, volume: fiveSecBar.volume,
+        open,
+        high: Math.max(open, fiveSecBar.high),
+        low: Math.min(open, fiveSecBar.low),
+        close: fiveSecBar.close,
+        volume: fiveSecBar.volume,
       };
     } else if (barTime === this.currentBar.time) {
       if (this.currentBar.volume === 0) {
-        // Current bucket was a flat synthetic placeholder — the first real trade
-        // defines the true open/range (TWS opens at first print, not prevClose).
+        // Flat synthetic placeholder (open already = prev close). Fold the first
+        // real trade in, KEEPING the continuous open so the candle stays flush
+        // with the prior close instead of jumping to the first print.
+        const open = this.currentBar.open;
         this.currentBar = {
           time: barTime,
-          open: fiveSecBar.open, high: fiveSecBar.high,
-          low: fiveSecBar.low, close: fiveSecBar.close, volume: fiveSecBar.volume,
+          open,
+          high: Math.max(open, fiveSecBar.high),
+          low: Math.min(open, fiveSecBar.low),
+          close: fiveSecBar.close,
+          volume: fiveSecBar.volume,
         };
       } else {
         this.currentBar.high = Math.max(this.currentBar.high, fiveSecBar.high);
@@ -295,8 +314,12 @@ export class MarketDataService {
       // Intraday: fill short in-session gaps with flat continuation candles so the
       // chart is continuous like TWS/TradingView, and so the live flat-fill and
       // the 3-min deep re-sync agree (a full re-render won't flicker gaps back).
+      // Then snap each bar's open to the prior consecutive bar's close so the
+      // candles connect like TV (IBKR's raw first-trade opens otherwise leave a
+      // bid/ask-bounce gap between every bar).
       if (timeframe !== '1d' && timeframe !== '1w') {
-        return MarketDataService.fillIntradayGaps(bars, useRTH, tf.seconds);
+        const filled = MarketDataService.fillIntradayGaps(bars, useRTH, tf.seconds);
+        return MarketDataService.makeContinuous(filled, tf.seconds);
       }
       return bars;
     });
@@ -335,6 +358,30 @@ export class MarketDataService {
       }
     }
     return out;
+  }
+
+  /**
+   * Make intraday candles continuous like TWS/TradingView: snap each bar's open
+   * to the previous bar's close when the two are exactly one bucket apart (same
+   * session — guaranteed contiguous by fillIntradayGaps), and expand high/low to
+   * include the new open so no traded extreme is lost (a gapped bar just grows a
+   * small wick down/up to the connection). Bars that aren't consecutive (across
+   * the overnight/lunch/session boundary, or the first bar) keep their real open,
+   * so session opens stay genuine and no wick is drawn across a real gap.
+   * Mutates in place and returns the same array. high/low/close/volume unchanged.
+   */
+  private static makeContinuous(bars: Bar[], barSeconds: number): Bar[] {
+    for (let i = 1; i < bars.length; i++) {
+      const prev = bars[i - 1];
+      const b = bars[i];
+      if (Number(b.time) !== Number(prev.time) + barSeconds) continue; // not consecutive
+      const open = prev.close;
+      if (open === b.open) continue;
+      b.open = open;
+      if (open > b.high) b.high = open;
+      if (open < b.low) b.low = open;
+    }
+    return bars;
   }
 
   /**
@@ -691,20 +738,26 @@ export class MarketDataService {
       if (!this.activeStreams.has(reqId)) return;
       try {
         const tf = TIMEFRAMES[timeframe];
-        // Just the last few bars — enough to catch the freshly-closed one plus a
-        // little overlap, without a heavy fetch on every minute.
-        const durSec = Math.min(Math.max(tf.seconds * 3, 180), 86400);
-        const bars = await this.runHistoricalRequest(contract, tf.barSize, `${Math.ceil(durSec)} S`, useRTH);
+        // A few bars: enough to catch the freshly-closed one plus a lead-in bar
+        // used only as the continuity anchor (see below), without a heavy fetch.
+        const durSec = Math.min(Math.max(tf.seconds * 4, 240), 86400);
+        const raw = await this.runHistoricalRequest(contract, tf.barSize, `${Math.ceil(durSec)} S`, useRTH);
+        // Match the historical path so corrections don't re-introduce the gaps:
+        // flat-fill quiet minutes, then snap opens to the prior close.
+        const filled = MarketDataService.fillIntradayGaps(raw, useRTH, tf.seconds);
+        const bars = MarketDataService.makeContinuous(filled, tf.seconds);
 
         const live = this.activeStreams.get(reqId);
         if (!live || !bars.length) return;
 
         // Correct every returned bar EXCEPT the one still forming — that bucket
-        // is owned by the live aggregator (and tick painting on the client).
-        // The just-closed bar is older than formingTime, so it IS corrected.
+        // is owned by the live aggregator (and tick painting on the client) — and
+        // EXCEPT the first bar, which has no predecessor in this window so its open
+        // couldn't be made continuous (it's only the anchor for bars[1]).
         const formingTime = live.aggregator.currentTime;
         let corrected = 0;
-        for (const b of bars) {
+        for (let i = 1; i < bars.length; i++) {
+          const b = bars[i];
           if (formingTime != null && Number(b.time) >= formingTime) continue;
           live.onBar(b, true);
           corrected++;
