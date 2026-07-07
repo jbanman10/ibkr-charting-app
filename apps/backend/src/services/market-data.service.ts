@@ -88,9 +88,20 @@ class BarAggregator {
   // (open == prev close). Reset to null across a session/overnight gap so we
   // never snap the first bar of a new session back to the prior session.
   private lastClose: number | null = null;
+  // Continuity (open == prev close) applies to regular hours only; pre/post
+  // market keep real first-trade opens so extended-hours gaps show like TV.
+  private readonly isRTH: (sec: number) => boolean;
 
-  constructor(timeframe: Timeframe) {
+  constructor(timeframe: Timeframe, isRTH: (sec: number) => boolean) {
     this.barSeconds = TIMEFRAMES[timeframe].seconds;
+    this.isRTH = isRTH;
+  }
+
+  /** Whether a new bucket at `barTime` should open at the prior close (RTH-only, consecutive). */
+  private continuous(barTime: number): boolean {
+    return this.lastClose != null
+      && this.isRTH(barTime)
+      && this.isRTH(barTime - this.barSeconds);
   }
 
   /**
@@ -144,10 +155,10 @@ class BarAggregator {
     const { closed } = this.advanceTo(fiveSecBar.time, inSession);
 
     if (!this.currentBar || barTime > this.currentBar.time) {
-      // Brand-new bucket (or reset by a large gap). Open at the previous bar's
-      // close when we have one (continuous within session), else the 5s bar's
-      // real open (session start / first bar).
-      const open = this.lastClose ?? fiveSecBar.open;
+      // Brand-new bucket (or reset by a large gap). During RTH open at the
+      // previous bar's close (continuous); pre/post-market and session starts
+      // keep the 5s bar's real open so the genuine gap shows.
+      const open = this.continuous(barTime) ? this.lastClose! : fiveSecBar.open;
       this.currentBar = {
         time: barTime,
         open,
@@ -158,10 +169,10 @@ class BarAggregator {
       };
     } else if (barTime === this.currentBar.time) {
       if (this.currentBar.volume === 0) {
-        // Flat synthetic placeholder (open already = prev close). Fold the first
-        // real trade in, KEEPING the continuous open so the candle stays flush
-        // with the prior close instead of jumping to the first print.
-        const open = this.currentBar.open;
+        // Flat synthetic placeholder (open currently = prev close). Fold the
+        // first real trade in: during RTH keep the continuous open; in pre/post
+        // market take the real first-trade open so the gap shows.
+        const open = this.continuous(barTime) ? this.currentBar.open : fiveSecBar.open;
         this.currentBar = {
           time: barTime,
           open,
@@ -375,6 +386,10 @@ export class MarketDataService {
       const prev = bars[i - 1];
       const b = bars[i];
       if (Number(b.time) !== Number(prev.time) + barSeconds) continue; // not consecutive
+      // Regular hours only. Pre/post-market keep their real first-trade opens so
+      // the genuine extended-hours gaps show, like TradingView; connecting them
+      // would distort the pre-market candle structure and H/L read.
+      if (!MarketDataService.isRTH(Number(b.time)) || !MarketDataService.isRTH(Number(prev.time))) continue;
       const open = prev.close;
       if (open === b.open) continue;
       b.open = open;
@@ -382,6 +397,12 @@ export class MarketDataService {
       if (open < b.low) b.low = open;
     }
     return bars;
+  }
+
+  /** True when the bar's ET minute-of-day is inside regular trading hours (09:30–16:00). */
+  private static isRTH(unixSec: number): boolean {
+    const m = MarketDataService.etMinuteOfDay(unixSec);
+    return m >= 570 && m < 960;
   }
 
   /**
@@ -595,7 +616,7 @@ export class MarketDataService {
       useRTH,
       onBar,
       onTick,
-      aggregator: new BarAggregator(timeframe),
+      aggregator: new BarAggregator(timeframe, MarketDataService.sessionPredicate(1)),
       inSession: MarketDataService.sessionPredicate(useRTH),
     };
     this.activeStreams.set(reqId, stream);
