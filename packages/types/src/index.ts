@@ -154,6 +154,24 @@ export interface SearchResponse {
   results: ContractSearchResult[];
 }
 
+// A lightweight quote for the watchlist: last print, change vs previous RTH
+// close, and today's cumulative (extended-hours) volume.
+export interface Quote {
+  symbol: string;
+  last: number;
+  prevClose: number;
+  change: number;
+  changePct: number;
+  volume: number;
+}
+
+// Per-symbol result: either a Quote or an error (bad symbol, no data, etc.).
+export type QuoteResult = Quote | { symbol: string; error: string };
+
+export interface QuotesResponse {
+  quotes: QuoteResult[];
+}
+
 // ─── Indicator types ─────────────────────────────────────────────────────────
 
 export type IndicatorType = 'SMA' | 'EMA';

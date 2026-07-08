@@ -45,6 +45,10 @@ const HIST_SPACING_MS = 150;
 // clear of the historical/stream/search reqId ranges.
 const TICK_REQID_OFFSET = 1_000_000;
 
+// Min gap between on-rollover corrections per symbol|timeframe (coalesces bursts;
+// real closes are ≥ one bar apart so this never blocks a legit rollover).
+const CORRECT_MIN_MS = 15_000;
+
 interface ActiveStream {
   reqId: number;
   symbol: string;
@@ -171,6 +175,55 @@ export class MarketDataService {
   private static etMinuteOfDay(unixSec: number): number {
     const [h, m] = MarketDataService.ET_HM.format(unixSec * 1000).split(':').map(Number);
     return h * 60 + m;
+  }
+
+  /** True when the timestamp's ET minute-of-day is inside regular hours (09:30–16:00). */
+  private static isRTH(unixSec: number): boolean {
+    const m = MarketDataService.etMinuteOfDay(unixSec);
+    return m >= 570 && m < 960;
+  }
+
+  // Last on-rollover correction per symbol|timeframe (throttle).
+  private lastCorrect = new Map<string, number>();
+
+  /**
+   * On a regular-hours rollover, re-fetch the last few OFFICIAL bars and re-emit
+   * the closed ones so the just-finished candle snaps to its authoritative value
+   * right as the new candle opens (TWS-style), instead of drifting until the
+   * frontend's periodic re-sync. Async (queued on histChain), so it never blocks
+   * live rendering; a per-key throttle coalesces bursts. TRADES only — no clamp
+   * (RTH bars are already NBBO-protected); the forming bar is left to the live feed.
+   */
+  private correctRecent(stream: ActiveStream): void {
+    const { timeframe, contract, useRTH, reqId, symbol } = stream;
+    if (timeframe === '1d' || timeframe === '1w') return; // intraday only
+    const key = `${symbol}|${timeframe}`;
+    const now = Date.now();
+    if (now - (this.lastCorrect.get(key) ?? 0) < CORRECT_MIN_MS) return;
+    this.lastCorrect.set(key, now);
+
+    const run = async () => {
+      if (!this.activeStreams.has(reqId)) return;
+      try {
+        const tf = TIMEFRAMES[timeframe];
+        // Last ~5 bars — enough to catch the freshly-closed one plus a little overlap.
+        const durSec = Math.min(Math.max(tf.seconds * 5, 300), 86400);
+        const bars = await this.runHistoricalRequest(contract, tf.barSize, `${Math.ceil(durSec)} S`, useRTH);
+        const live = this.activeStreams.get(reqId);
+        if (!live || !bars.length) return;
+        const formingTime = live.lastBar ? Number(live.lastBar.time) : null;
+        for (const b of bars) {
+          // Never overwrite the live forming bar; only correct closed RTH bars.
+          if (formingTime != null && Number(b.time) >= formingTime) continue;
+          if (!MarketDataService.isRTH(Number(b.time))) continue;
+          live.onBar(b, true);
+        }
+      } catch (err) {
+        this.logger.warn({ reqId, err: err instanceof Error ? err.message : String(err) }, 'Rollover correction failed');
+      }
+    };
+    const advance = () => this.delay(HIST_SPACING_MS);
+    this.histChain = this.histChain.then(run, run).then(advance, advance);
   }
 
   private runHistoricalRequest(
@@ -403,6 +456,10 @@ export class MarketDataService {
           stream.onBar(last, true);   // previous bar is now final
           stream.onBar(bar, false);   // new forming bar
           stream.lastBar = bar;
+          // Finalize the just-closed bar to its official value right as the new
+          // one opens (TWS-style), for regular-hours bars. Pre/post-market rely
+          // on the frontend's clamped re-sync (needs BID_ASK, heavier).
+          if (MarketDataService.isRTH(Number(last.time))) this.correctRecent(stream);
         } else if (last && time < Number(last.time)) {
           stream.onBar(bar, true);    // late correction to an older bar — update in place
         } else {

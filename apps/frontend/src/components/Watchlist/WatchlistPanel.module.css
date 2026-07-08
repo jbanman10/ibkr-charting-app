@@ -1,0 +1,207 @@
+.drawer {
+  width: 248px;
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border-subtle);
+  overflow: hidden;
+}
+
+/* ─── Header ─────────────────────────────────────────────────────────────── */
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.title {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+  flex: 1;
+}
+
+.spinner {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--border-muted);
+  border-top-color: var(--text-secondary);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.closeBtn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
+/* ─── Add row ────────────────────────────────────────────────────────────── */
+
+.addRow {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.addInput {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.addInput:focus { border-color: var(--accent, #2962ff); }
+.addInput::placeholder { color: var(--text-secondary); text-transform: none; }
+
+.addBtn {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid var(--border-muted);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+
+.addBtn:hover:not(:disabled) { background: var(--bg-base); border-color: var(--text-secondary); }
+.addBtn:disabled { opacity: 0.4; cursor: default; }
+
+/* ─── List ───────────────────────────────────────────────────────────────── */
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.empty {
+  padding: 16px 12px;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background 0.1s;
+}
+
+.row:hover { background: var(--bg-elevated); }
+
+.rowActive {
+  background: color-mix(in srgb, var(--accent, #2962ff) 12%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent, #2962ff);
+}
+.rowActive:hover { background: color-mix(in srgb, var(--accent, #2962ff) 16%, transparent); }
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.symbol {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.volume {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.rowStats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  text-align: right;
+}
+
+.price {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.pct {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.up { color: var(--candle-up); }
+.down { color: var(--candle-down); }
+
+/* Remove button — hidden until row hover, sits over the stats column. */
+.removeBtn {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.row:hover .removeBtn { display: flex; }
+.removeBtn:hover { color: var(--candle-down); background: var(--bg-base); }
