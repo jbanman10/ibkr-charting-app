@@ -18,6 +18,8 @@ import ResizableGrid from './components/Grid/ResizableGrid';
 import LayoutPicker from './components/Grid/LayoutPicker';
 import StatusBar from './components/StatusBar';
 import MarketSummary from './components/MarketSummary/MarketSummary';
+import WatchlistPanel from './components/Watchlist/WatchlistPanel';
+import SideRail, { type RailItem } from './components/SideRail/SideRail';
 import styles from './App.module.css';
 
 const AUTOSAVE_MS = 5_000;
@@ -29,6 +31,7 @@ export default function App() {
   );
   const [activeTool, setActiveTool] = useState<DrawingToolType>('none');
   const [showSummary, setShowSummary] = useState(false);
+  const [showWatchlist, setShowWatchlist] = useState(false);
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
   const layoutRef = useRef(layout);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
@@ -109,6 +112,17 @@ export default function App() {
     setLayout((l) => updatePanel(l, id, updates));
   }, []);
 
+  // Click a watchlist ticker → load it into the currently focused chart. The
+  // panel's own subscription effect handles unsubscribe(old)/subscribe(new) when
+  // its symbol changes. Watchlist quotes are STK/SMART/USD (like the summary).
+  const handleWatchlistSelect = useCallback((symbol: string) => {
+    const id = layoutRef.current.panels.some((p) => p.id === focusedPanelId)
+      ? focusedPanelId
+      : layoutRef.current.panels[0]?.id;
+    if (!id) return;
+    handlePanelChange(id, { symbol, secType: 'STK', exchange: 'SMART', currency: 'USD' });
+  }, [focusedPanelId, handlePanelChange]);
+
   const handleColumnResize = useCallback((sizes: number[]) => {
     setLayout((l) => ({ ...l, columnSizes: sizes }));
   }, []);
@@ -132,6 +146,21 @@ export default function App() {
   const focusedPanel = layout.panels.find((p) => p.id === focusedPanelId);
   const maxIdx = maximizedPanelId ? layout.panels.findIndex((p) => p.id === maximizedPanelId) : -1;
   const maximizedIndex = maxIdx >= 0 ? maxIdx : null;
+
+  // Right-edge tool rail — extend this list as more quick tools land.
+  const railItems: RailItem[] = [
+    {
+      id: 'watchlist',
+      title: showWatchlist ? 'Hide watchlist' : 'Show watchlist',
+      active: showWatchlist,
+      onClick: () => setShowWatchlist((v) => !v),
+      icon: (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      ),
+    },
+  ];
 
   return (
     <div className={styles.root}>
@@ -221,34 +250,48 @@ export default function App() {
         </div>
       </header>
 
-      {/* ── Resizable panel grid ────────────────────────────────────── */}
-      <div className={styles.gridWrapper}>
-        <ResizableGrid
-          layout={layout}
-          preset={preset}
-          onColumnResize={handleColumnResize}
-          onRowResize={handleRowResize}
-          maximizedIndex={maximizedIndex}
-        >
-          {layout.panels.map((panel) => (
-            <ChartPanel
-              key={panel.id}
-              panel={panel}
-              activeTool={activeTool}
-              onToolChange={setActiveTool}
-              onPanelChange={(updates) => handlePanelChange(panel.id, updates)}
-              onClose={() => {/* handled by layout switch */}}
-              canClose={false}
-              subscribe={subscribe}
-              unsubscribe={unsubscribe}
-              ibkrConnected={ibkrConnected}
-              isFocused={focusedPanelId === panel.id}
-              onFocus={() => setFocusedPanelId(panel.id)}
-              isMaximized={maximizedPanelId === panel.id}
-              onToggleMaximize={() => toggleMaximize(panel.id)}
-            />
-          ))}
-        </ResizableGrid>
+      {/* ── Workspace: panel grid + docked watchlist ────────────────── */}
+      <div className={styles.workspace}>
+        <div className={styles.gridWrapper}>
+          <ResizableGrid
+            layout={layout}
+            preset={preset}
+            onColumnResize={handleColumnResize}
+            onRowResize={handleRowResize}
+            maximizedIndex={maximizedIndex}
+          >
+            {layout.panels.map((panel) => (
+              <ChartPanel
+                key={panel.id}
+                panel={panel}
+                activeTool={activeTool}
+                onToolChange={setActiveTool}
+                onPanelChange={(updates) => handlePanelChange(panel.id, updates)}
+                onClose={() => {/* handled by layout switch */}}
+                canClose={false}
+                subscribe={subscribe}
+                unsubscribe={unsubscribe}
+                ibkrConnected={ibkrConnected}
+                isFocused={focusedPanelId === panel.id}
+                onFocus={() => setFocusedPanelId(panel.id)}
+                isMaximized={maximizedPanelId === panel.id}
+                onToggleMaximize={() => toggleMaximize(panel.id)}
+              />
+            ))}
+          </ResizableGrid>
+        </div>
+
+        {showWatchlist && (
+          <WatchlistPanel
+            ibkrConnected={ibkrConnected}
+            focusedSymbol={focusedPanel?.symbol}
+            onSelect={handleWatchlistSelect}
+            onClose={() => setShowWatchlist(false)}
+          />
+        )}
+
+        {/* Persistent tool rail on the right edge */}
+        <SideRail items={railItems} />
       </div>
 
       {/* ── Morning summary popup ───────────────────────────────────── */}

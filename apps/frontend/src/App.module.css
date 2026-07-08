@@ -130,10 +130,20 @@
   border-color: rgba(218,54,51,0.2) !important;
 }
 
-/* ─── Grid area ────────────────────────────────────────────────────────────── */
+/* ─── Workspace (grid + docked watchlist) ─────────────────────────────────── */
+
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  position: relative;
+  overflow: hidden;
+}
 
 .gridWrapper {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   position: relative;

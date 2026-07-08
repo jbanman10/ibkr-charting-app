@@ -1,0 +1,56 @@
+.rail {
+  width: 44px;
+  flex-shrink: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 0;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border-subtle);
+  z-index: 16;
+}
+
+.btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
+.btnActive {
+  background: color-mix(in srgb, var(--accent, #2962ff) 16%, transparent);
+  color: var(--accent, #2962ff);
+}
+
+.btnActive:hover {
+  background: color-mix(in srgb, var(--accent, #2962ff) 22%, transparent);
+  color: var(--accent, #2962ff);
+}
+
+/* Accent indicator on the inner (content-facing) edge when active. */
+.btnActive::before {
+  content: '';
+  position: absolute;
+  left: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent, #2962ff);
+}
