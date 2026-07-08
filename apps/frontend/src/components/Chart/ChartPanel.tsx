@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import type { Bar, IndicatorConfig, Timeframe, ContractSearchResult, Tick } from '@ibkr-chart/types';
+import { TIMEFRAMES, type Bar, type IndicatorConfig, type Timeframe, type ContractSearchResult, type Tick } from '@ibkr-chart/types';
 import type { PanelConfig } from '../../lib/layout';
 import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { DrawingToolType } from './DrawingCanvas';
@@ -23,6 +23,31 @@ import styles from './ChartPanel.module.css';
 
 // Session overlays only make sense on fine-grained intraday timeframes.
 const INTRADAY_TF: ReadonlySet<string> = new Set(['1m', '5m', '15m', '30m', '1h']);
+
+// TradingView-style timeframe hotkey: parse a typed resolution string into one
+// of our supported timeframes. Bare numbers are minutes (60→1h, 240→4h); a
+// letter suffix picks the unit ("1d"/"d" daily, "1w"/"w" weekly, "1h"/"4h").
+function parseTimeframe(raw: string): Timeframe | null {
+  const m = raw.trim().toLowerCase().match(/^(\d+)?([mhdw])?$/);
+  if (!m || (!m[1] && !m[2])) return null;
+  const num = m[1] ? parseInt(m[1], 10) : null;
+  const unit = m[2] ?? null;
+  if (!unit) {
+    switch (num) {
+      case 1: return '1m'; case 5: return '5m'; case 15: return '15m';
+      case 30: return '30m'; case 60: return '1h'; case 240: return '4h';
+      default: return null;
+    }
+  }
+  const n = num ?? 1;
+  switch (unit) {
+    case 'm': return ({ 1: '1m', 5: '5m', 15: '15m', 30: '30m' } as Record<number, Timeframe>)[n] ?? null;
+    case 'h': return n === 1 ? '1h' : n === 4 ? '4h' : null;
+    case 'd': return n === 1 ? '1d' : null;
+    case 'w': return n === 1 ? '1w' : null;
+    default:  return null;
+  }
+}
 
 // Default look + overlay group for each session level. Single source of truth
 // for both line building and the double-click settings card.
@@ -112,6 +137,12 @@ export default function ChartPanel({
   const [showIndicators, setShowIndicators] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // TradingView-style timeframe hotkey: the buffer of typed chars (null = idle)
+  // and a transient "invalid" flash when an unrecognized code is committed.
+  const [tfInput, setTfInput] = useState<string | null>(null);
+  const [tfInvalid, setTfInvalid] = useState(false);
+  const tfInputRef = useRef<string | null>(null);
+  useEffect(() => { tfInputRef.current = tfInput; }, [tfInput]);
   // Reactive mirror of barsRef for consumers that need to re-render (drawing
   // clamp extent, OHLC display, drawing hit-testing). Updated on snapshot and
   // on each bar close (~once/min), not on every live update.
@@ -248,6 +279,29 @@ export default function ChartPanel({
     const price = q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : 0);
     const base = formingRef.current;
     if (price <= 0 || !base) return;
+
+    // Clock-driven rollover: if the minute (bar boundary) has passed but IBKR's
+    // keepUpToDate update hasn't arrived yet, open the next candle locally at the
+    // current price so it appears right on the boundary (TWS-like) instead of a
+    // couple seconds late. The next bar_update/bar_close re-anchors it to the
+    // exact official OHLC. Anchored off base.time so it's correct for every
+    // timeframe (incl. RTH-offset 1h bars), not just epoch-aligned ones.
+    const tfSec = TIMEFRAMES[panel.timeframe].seconds;
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (nowSec - Number(base.time) >= tfSec) {
+      const steps = Math.floor((nowSec - Number(base.time)) / tfSec);
+      const newTime = Number(base.time) + steps * tfSec;
+      // Keep the just-finalized bar in the closed-bar history so overlays/session
+      // math still see it until the authoritative bar_close confirms it.
+      const cidx = barsRef.current.findIndex((b) => Number(b.time) === Number(base.time));
+      if (cidx >= 0) barsRef.current[cidx] = base; else barsRef.current.push(base);
+      const nb: Bar = { time: newTime, open: price, high: price, low: price, close: price, volume: 0 };
+      formingRef.current = nb;
+      chartRef.current?.updateBar(nb);
+      recomputeSessions();
+      return;
+    }
+
     base.close = price;
     if (price > base.high) base.high = price;
     if (price < base.low) base.low = price;
@@ -257,7 +311,7 @@ export default function ChartPanel({
         if (formingRef.current) chartRef.current?.updateBar(formingRef.current);
       });
     }
-  }, [panel.symbol, panel.timeframe]);
+  }, [panel.symbol, panel.timeframe, recomputeSessions]);
 
   useEffect(() => {
     tickHandlerRef.current = applyTick;
@@ -299,9 +353,11 @@ export default function ChartPanel({
       barsRef.current = bars;
       const forming = formingRef.current;
       if (forming && Number(forming.time) > Number(bar.time)) {
-        // Late correction to an older bar (no longer the chart's last point) —
-        // re-render preserving the viewport.
-        chartRef.current?.correctBars(bars);
+        // Correction to a bar that's no longer the chart's last point (a late
+        // print, or the bar we just rolled past locally) — re-render preserving
+        // the viewport. Keep the live forming bar on the end so the candle we
+        // opened locally doesn't flicker out until the next bar_update.
+        chartRef.current?.correctBars([...bars, forming]);
       } else {
         formingRef.current = { ...bar };
         chartRef.current?.updateBar(bar);
@@ -449,6 +505,7 @@ export default function ChartPanel({
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (tfInputRef.current !== null) return; // mid timeframe-hotkey entry
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
         deleteSelectedDrawing();
@@ -460,6 +517,59 @@ export default function ChartPanel({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [isFocused, selectedDrawingId, deleteSelectedDrawing]);
+
+  // ─── Timeframe hotkey (TradingView-style) ─────────────────────────────────
+  // Type a resolution over the focused chart: a digit opens the box, more
+  // digits/letters build it up, Enter (or a brief pause) applies it.
+
+  const commitTf = useCallback((raw: string) => {
+    const tf = parseTimeframe(raw);
+    if (tf) {
+      setTfInput(null);
+      setTfInvalid(false);
+      if (tf !== panel.timeframe) onPanelChange({ timeframe: tf });
+    } else {
+      // Flash the box red briefly, then clear.
+      setTfInvalid(true);
+      setTimeout(() => { setTfInput(null); setTfInvalid(false); }, 550);
+    }
+  }, [panel.timeframe, onPanelChange]);
+
+  useEffect(() => {
+    if (!isFocused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+
+      const active = tfInputRef.current;
+      if (active === null) {
+        if (/^[0-9]$/.test(e.key)) { e.preventDefault(); setTfInput(e.key); }
+        return;
+      }
+      // A code is being typed — capture the relevant keys so nothing else acts.
+      if (/^[0-9]$/.test(e.key)) { e.preventDefault(); setTfInput(active + e.key); }
+      else if (/^[mhdw]$/i.test(e.key)) { e.preventDefault(); setTfInput(active + e.key.toLowerCase()); }
+      else if (e.key === 'Backspace') { e.preventDefault(); setTfInput(active.length <= 1 ? null : active.slice(0, -1)); }
+      else if (e.key === 'Enter') { e.preventDefault(); commitTf(active); }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); setTfInput(null); setTfInvalid(false); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isFocused, commitTf]);
+
+  // Auto-apply shortly after typing stops (TradingView behavior). Enter commits
+  // immediately; this handles the "type and pause" case.
+  useEffect(() => {
+    if (tfInput === null || tfInvalid) return;
+    const t = setTimeout(() => commitTf(tfInput), 1100);
+    return () => clearTimeout(t);
+  }, [tfInput, tfInvalid, commitTf]);
+
+  // Cancel any in-progress hotkey entry when the panel loses focus.
+  useEffect(() => {
+    if (!isFocused && tfInput !== null) { setTfInput(null); setTfInvalid(false); }
+  }, [isFocused, tfInput]);
 
   // Absolute time extent of loaded bars — used to clamp drawings that extend
   // beyond the loaded window (so they line up across timeframes).
@@ -558,6 +668,13 @@ export default function ChartPanel({
         <div className={styles.ohlcvRow}>
           <PriceDisplay symbol={panel.symbol} data={displayData} />
         </div>
+
+        {tfInput !== null && (
+          <div className={`${styles.tfHotkey} ${tfInvalid ? styles.tfHotkeyInvalid : ''}`}>
+            <span className={styles.tfHotkeyValue}>{tfInput.toUpperCase()}</span>
+            <span className={styles.tfHotkeyHint}>timeframe</span>
+          </div>
+        )}
 
         {loading && (
           <div className={styles.overlay}>
