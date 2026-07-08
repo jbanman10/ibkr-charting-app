@@ -128,6 +128,9 @@ export class WebSocketGateway {
       const unsubscribe = this.marketData.subscribeRealTime(
         contract,
         timeframe,
+        (bars: Bar[]) => {
+          this.send(ws, { type: 'snapshot', symbol, timeframe, bars });
+        },
         (bar: Bar, isClosed: boolean) => {
           this.send(ws, {
             type: isClosed ? 'bar_close' : 'bar_update',

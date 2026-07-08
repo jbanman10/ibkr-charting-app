@@ -68,6 +68,7 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeConfig> = {
 export type WsMessageType =
   | 'subscribe'
   | 'unsubscribe'
+  | 'snapshot'
   | 'tick'
   | 'bar_update'
   | 'bar_close'
@@ -94,6 +95,13 @@ export interface WsUnsubscribeMsg {
 export type WsClientMsg = WsSubscribeMsg | WsUnsubscribeMsg;
 
 // Server → Client
+export interface WsSnapshotMsg {
+  type: 'snapshot';     // Initial history for a subscription (keepUpToDate batch)
+  symbol: string;
+  timeframe: Timeframe;
+  bars: Bar[];
+}
+
 export interface WsTickMsg {
   type: 'tick';
   symbol: string;
@@ -127,6 +135,7 @@ export interface WsErrorMsg {
 }
 
 export type WsServerMsg =
+  | WsSnapshotMsg
   | WsTickMsg
   | WsBarUpdateMsg
   | WsBarCloseMsg
