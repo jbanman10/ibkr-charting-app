@@ -182,6 +182,49 @@ export default function ChartPanel({
     return () => { clearTimeout(t); unsubscribe(panel.symbol); };
   }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Periodic history re-sync. keepUpToDate keeps the FORMING bar correct but does
+  // not retroactively fix a CLOSED bar when IBKR folds in a late-reported print
+  // minutes later (common in pre-market) — which would leave a level like PML
+  // wrong until a manual refresh. Re-fetch official history, correct the closed
+  // bars (keeping the live forming bar), and recompute levels. Jittered so panels
+  // don't burst the pacing queue together.
+  useEffect(() => {
+    if (!panel.symbol) return;
+    const REFRESH_MS = 60_000 + Math.random() * 15_000;
+    const ctrl = new AbortController();
+    const timer = setInterval(async () => {
+      if (!chartReadyRef.current || !gotSnapshotRef.current) return;
+      try {
+        const params = new URLSearchParams({
+          symbol: panel.symbol,
+          secType: panel.secType,
+          exchange: panel.exchange,
+          currency: panel.currency,
+          timeframe: panel.timeframe,
+          useRTH: String(panel.useRTH ?? 0),
+        });
+        const res = await fetch(`/api/bars?${params}`, { signal: ctrl.signal });
+        if (!res.ok) return;
+        const body = (await res.json()) as { bars?: Bar[] };
+        const official = body.bars ?? [];
+        if (official.length < 2) return;
+        barsRef.current = official;
+        // Keep the live forming bar on the end (it's newer than official's last
+        // when a bar is mid-formation); buildSeries de-dupes by time.
+        const forming = formingRef.current;
+        const series = forming && Number(forming.time) > Number(official[official.length - 1].time)
+          ? [...official, forming]
+          : official;
+        chartRef.current?.correctBars(series);
+        const active = panel.indicators.filter((i) => i.visible);
+        if (active.length) chartRef.current?.setIndicators(computeIndicators(official, active, panel.timeframe));
+        setBars(official);
+        recomputeSessions();
+      } catch { /* transient — next cycle retries */ }
+    }, REFRESH_MS);
+    return () => { ctrl.abort(); clearInterval(timer); };
+  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, panel.indicators, recomputeSessions]);
+
   // ─── Stream handlers (snapshot / bar_update / bar_close) ───────────────────
   //
   // Bars come straight from IBKR's keepUpToDate feed (TWS-equivalent): the
