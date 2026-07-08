@@ -182,15 +182,14 @@ export default function ChartPanel({
     return () => { clearTimeout(t); unsubscribe(panel.symbol); };
   }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic history re-sync. keepUpToDate keeps the FORMING bar correct but does
-  // not retroactively fix a CLOSED bar when IBKR folds in a late-reported print
-  // minutes later (common in pre-market) — which would leave a level like PML
-  // wrong until a manual refresh. Re-fetch official history, correct the closed
-  // bars (keeping the live forming bar), and recompute levels. Jittered so panels
-  // don't burst the pacing queue together.
+  // Periodic history re-sync — a backstop for late-reported prints and the
+  // extended-hours NBBO clamp (via /api/bars). The backend's on-rollover
+  // correction already finalizes regular-hours candles immediately, so this runs
+  // infrequently: re-fetch official history, correct the closed bars (keeping the
+  // live forming bar), recompute levels. Jittered so panels don't burst together.
   useEffect(() => {
     if (!panel.symbol) return;
-    const REFRESH_MS = 60_000 + Math.random() * 15_000;
+    const REFRESH_MS = 180_000 + Math.random() * 30_000;
     const ctrl = new AbortController();
     const timer = setInterval(async () => {
       if (!chartReadyRef.current || !gotSnapshotRef.current) return;
