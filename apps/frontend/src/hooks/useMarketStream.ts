@@ -36,19 +36,22 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCount = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingSubscription = useRef<WsClientMsg | null>(null);
+  // All active subscriptions keyed by symbol, so EVERY panel is re-subscribed on
+  // reconnect (e.g. after a backend restart) — not just the most recent one.
+  const activeSubs = useRef<Map<string, WsSubscribeMsg>>(new Map());
   const optsRef = useRef(opts);
 
   // Keep opts ref current without restarting effect
   useEffect(() => { optsRef.current = opts; });
 
   const send = useCallback((msg: WsClientMsg) => {
+    // Track subscribe/unsubscribe intent so we can replay it on reconnect.
+    if (msg.type === 'subscribe') activeSubs.current.set(msg.symbol, msg);
+    else if (msg.type === 'unsubscribe') activeSubs.current.delete(msg.symbol);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(msg));
-    } else {
-      // Queue so it fires on reconnect
-      pendingSubscription.current = msg;
     }
+    // If not open, the subscription is held in activeSubs and replayed on onopen.
   }, []);
 
   const connect = useCallback(() => {
@@ -61,10 +64,10 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
     ws.onopen = () => {
       reconnectCount.current = 0;
       setStatus('connected');
-      // Flush any queued subscription
-      if (pendingSubscription.current) {
-        ws.send(JSON.stringify(pendingSubscription.current));
-        pendingSubscription.current = null;
+      // Re-subscribe every active panel so all charts get a fresh snapshot after
+      // a (re)connect — not just the last one.
+      for (const msg of activeSubs.current.values()) {
+        ws.send(JSON.stringify(msg));
       }
     };
 
