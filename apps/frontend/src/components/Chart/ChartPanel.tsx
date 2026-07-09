@@ -214,17 +214,25 @@ export default function ChartPanel({
     return () => { clearTimeout(t); unsubscribe(panel.symbol, panel.id); };
   }, [panel.id, panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Periodic history re-sync — a backstop for late-reported prints and the
-  // extended-hours NBBO clamp (via /api/bars). The backend's on-rollover
-  // correction already finalizes regular-hours candles immediately, so this runs
-  // infrequently: re-fetch official history, correct the closed bars (keeping the
-  // live forming bar), recompute levels. Jittered so panels don't burst together.
+  // Periodic history re-sync — a backstop for late-reported prints, IBKR's
+  // penny-level history revisions, and the extended-hours NBBO clamp (via
+  // /api/bars). The backend's on-rollover correction already finalizes
+  // regular-hours candles immediately, so this runs infrequently. Jittered so
+  // panels don't burst together. ALSO fires when the window becomes visible:
+  // background/occluded windows get their timers throttled (Chromium/Electron),
+  // so an occluded window can miss every cycle and drift from official history —
+  // resyncing on visibility guarantees a window is reconciled whenever the user
+  // is actually looking at it.
   useEffect(() => {
     if (!panel.symbol) return;
     const REFRESH_MS = 180_000 + Math.random() * 30_000;
+    const MIN_GAP_MS = 20_000; // visibility flaps shouldn't hammer /api/bars
     const ctrl = new AbortController();
-    const timer = setInterval(async () => {
+    let lastRun = 0;
+    const resync = async () => {
       if (!chartReadyRef.current || !gotSnapshotRef.current) return;
+      if (Date.now() - lastRun < MIN_GAP_MS) return;
+      lastRun = Date.now();
       try {
         const params = new URLSearchParams({
           symbol: panel.symbol,
@@ -252,8 +260,11 @@ export default function ChartPanel({
         setBars(official);
         recomputeSessions();
       } catch { /* transient — next cycle retries */ }
-    }, REFRESH_MS);
-    return () => { ctrl.abort(); clearInterval(timer); };
+    };
+    const timer = setInterval(resync, REFRESH_MS);
+    const onVisible = () => { if (document.visibilityState === 'visible') void resync(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { ctrl.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
   }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, panel.indicators, recomputeSessions]);
 
   // ─── Stream handlers (snapshot / bar_update / bar_close) ───────────────────
