@@ -25,8 +25,9 @@ export type SecType = 'STK' | 'FUT' | 'OPT' | 'CASH' | 'IND';
 export interface Contract {
   symbol: string;
   secType: SecType;
-  exchange: string;
+  exchange: string;          // routing/data exchange — SMART for consolidated tape
   currency: string;
+  primaryExchange?: string;  // listing exchange, for disambiguation only (never data)
   localSymbol?: string;      // e.g. "ESM4" for futures
   lastTradeDateOrContractMonth?: string;
   multiplier?: string;
@@ -88,6 +89,8 @@ export interface WsSubscribeMsg {
   subId?: string; // Unique per-panel subscription id. Without it, subscriptions
                   // key by symbol and two panels showing the same symbol stomp
                   // each other's stream (one panel silently starves).
+  primaryExchange?: string; // Listing exchange for disambiguation; data always
+                            // routes via `exchange` (SMART = consolidated tape).
 }
 
 export interface WsUnsubscribeMsg {

@@ -25,7 +25,7 @@ export interface UseMarketStreamOptions {
 export interface UseMarketStreamReturn {
   status: StreamStatus;
   ibkrConnected: boolean;
-  subscribe: (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 | undefined, subId: string) => void;
+  subscribe: (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 | undefined, subId: string, primaryExchange?: string) => void;
   unsubscribe: (symbol: string, subId: string) => void;
 }
 
@@ -126,8 +126,8 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
   }, [connect]);
 
   const subscribe = useCallback(
-    (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 = 1, subId: string) => {
-      send({ type: 'subscribe', symbol, secType, exchange, currency, timeframe, useRTH, subId });
+    (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 = 1, subId: string, primaryExchange?: string) => {
+      send({ type: 'subscribe', symbol, secType, exchange, currency, timeframe, useRTH, subId, primaryExchange });
     },
     [send]
   );

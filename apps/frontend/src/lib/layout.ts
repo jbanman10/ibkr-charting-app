@@ -152,8 +152,9 @@ export interface PanelConfig {
   id: string;
   symbol: string;
   secType: SecType;
-  exchange: string;
+  exchange: string;          // data/routing exchange — SMART for consolidated tape
   currency: string;
+  primaryExchange?: string;  // listing exchange (disambiguation only)
   timeframe: Timeframe;
   indicators: IndicatorConfig[];
   drawings: Drawing[];
@@ -239,10 +240,21 @@ export function loadLayout(): LayoutConfig {
     // Validate preset still exists
     if (!GRID_PRESETS[parsed.presetId]) return defaultLayout();
     // Backfill fields added after this layout was first saved.
-    parsed.panels = parsed.panels.map((p) => ({
-      ...p,
-      sessionOverlays: p.sessionOverlays ?? { ...DEFAULT_SESSION_OVERLAYS },
-    }));
+    parsed.panels = parsed.panels.map((p) => {
+      const next = {
+        ...p,
+        sessionOverlays: p.sessionOverlays ?? { ...DEFAULT_SESSION_OVERLAYS },
+      };
+      // Migrate stock panels saved with a single-venue exchange (old symbol
+      // search filled in the primary exchange, e.g. NASDAQ): market data must
+      // come from SMART (consolidated tape) or highs/lows differ from TWS/TV
+      // by pennies and candles show single-venue gaps.
+      if (next.secType === 'STK' && next.exchange && next.exchange !== 'SMART') {
+        next.primaryExchange = next.exchange;
+        next.exchange = 'SMART';
+      }
+      return next;
+    });
     return parsed;
   } catch {
     return defaultLayout();

@@ -97,7 +97,7 @@ export class WebSocketGateway {
 
     switch (msg.type) {
       case 'subscribe':
-        this.handleSubscribe(ws, session, msg.symbol, msg.secType, msg.exchange, msg.currency, msg.timeframe, msg.useRTH ?? 1, msg.subId);
+        this.handleSubscribe(ws, session, msg.symbol, msg.secType, msg.exchange, msg.currency, msg.timeframe, msg.useRTH ?? 1, msg.subId, msg.primaryExchange);
         break;
       case 'unsubscribe':
         this.handleUnsubscribe(session, msg.subId ?? msg.symbol);
@@ -116,7 +116,8 @@ export class WebSocketGateway {
     currency: string,
     timeframe: Timeframe,
     useRTH: 0 | 1,
-    subId?: string
+    subId?: string,
+    primaryExchange?: string
   ): void {
     const key = subId ?? symbol;
     // Clean up any existing subscription under this key (same panel re-subscribing)
@@ -128,7 +129,7 @@ export class WebSocketGateway {
     }
 
     try {
-      const contract = MarketDataService.toIBContract(symbol, secType as any, exchange, currency);
+      const contract = MarketDataService.toIBContract(symbol, secType as any, exchange, currency, primaryExchange);
 
       const unsubscribe = this.marketData.subscribeRealTime(
         contract,
