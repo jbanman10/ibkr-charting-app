@@ -132,6 +132,11 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Occluded/background windows otherwise get their timers throttled (and
+      // rAF suspended) by Chromium — which starves the charts' periodic history
+      // re-sync, so a covered window drifts from official bars and never
+      // reconciles. Live market charts must keep ticking while hidden.
+      backgroundThrottling: false,
     },
   });
 
