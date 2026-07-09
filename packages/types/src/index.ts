@@ -85,11 +85,15 @@ export interface WsSubscribeMsg {
   timeframe: Timeframe;
   useRTH?: 0 | 1; // 1 = RTH only, 0 = include extended hours. Matches the
                   // historical fetch so live bars use the same session. Default 1.
+  subId?: string; // Unique per-panel subscription id. Without it, subscriptions
+                  // key by symbol and two panels showing the same symbol stomp
+                  // each other's stream (one panel silently starves).
 }
 
 export interface WsUnsubscribeMsg {
   type: 'unsubscribe';
   symbol: string;
+  subId?: string; // Must match the subscribe's subId (falls back to symbol key).
 }
 
 export type WsClientMsg = WsSubscribeMsg | WsUnsubscribeMsg;

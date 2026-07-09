@@ -25,8 +25,8 @@ export interface UseMarketStreamOptions {
 export interface UseMarketStreamReturn {
   status: StreamStatus;
   ibkrConnected: boolean;
-  subscribe: (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH?: 0 | 1) => void;
-  unsubscribe: (symbol: string) => void;
+  subscribe: (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 | undefined, subId: string) => void;
+  unsubscribe: (symbol: string, subId: string) => void;
 }
 
 export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamReturn {
@@ -36,8 +36,9 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCount = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // All active subscriptions keyed by symbol, so EVERY panel is re-subscribed on
-  // reconnect (e.g. after a backend restart) — not just the most recent one.
+  // All active subscriptions keyed by subId (one per panel), so EVERY panel is
+  // re-subscribed on reconnect — and two panels holding the SAME symbol don't
+  // overwrite/kill each other's entry (they'd starve one chart's stream).
   const activeSubs = useRef<Map<string, WsSubscribeMsg>>(new Map());
   const optsRef = useRef(opts);
 
@@ -46,8 +47,8 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
 
   const send = useCallback((msg: WsClientMsg) => {
     // Track subscribe/unsubscribe intent so we can replay it on reconnect.
-    if (msg.type === 'subscribe') activeSubs.current.set(msg.symbol, msg);
-    else if (msg.type === 'unsubscribe') activeSubs.current.delete(msg.symbol);
+    if (msg.type === 'subscribe') activeSubs.current.set(msg.subId ?? msg.symbol, msg);
+    else if (msg.type === 'unsubscribe') activeSubs.current.delete(msg.subId ?? msg.symbol);
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify(msg));
     }
@@ -125,14 +126,14 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
   }, [connect]);
 
   const subscribe = useCallback(
-    (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 = 1) => {
-      send({ type: 'subscribe', symbol, secType, exchange, currency, timeframe, useRTH });
+    (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 = 1, subId: string) => {
+      send({ type: 'subscribe', symbol, secType, exchange, currency, timeframe, useRTH, subId });
     },
     [send]
   );
 
-  const unsubscribe = useCallback((symbol: string) => {
-    send({ type: 'unsubscribe', symbol });
+  const unsubscribe = useCallback((symbol: string, subId: string) => {
+    send({ type: 'unsubscribe', symbol, subId });
   }, [send]);
 
   return { status, ibkrConnected, subscribe, unsubscribe };

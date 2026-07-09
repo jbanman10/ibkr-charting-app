@@ -23,7 +23,10 @@ import { MarketDataService } from './market-data.service.js';
 
 interface ClientSession {
   ws: WebSocket;
-  subscriptions: Map<string, () => void>; // symbol → unsubscribe fn
+  // subId (or symbol when the client sends none) → unsubscribe fn. Keyed by the
+  // client's per-panel subId so several panels on ONE connection can hold the
+  // same symbol without replacing/killing each other's stream.
+  subscriptions: Map<string, () => void>;
 }
 
 export class WebSocketGateway {
@@ -94,10 +97,10 @@ export class WebSocketGateway {
 
     switch (msg.type) {
       case 'subscribe':
-        this.handleSubscribe(ws, session, msg.symbol, msg.secType, msg.exchange, msg.currency, msg.timeframe, msg.useRTH ?? 1);
+        this.handleSubscribe(ws, session, msg.symbol, msg.secType, msg.exchange, msg.currency, msg.timeframe, msg.useRTH ?? 1, msg.subId);
         break;
       case 'unsubscribe':
-        this.handleUnsubscribe(session, msg.symbol);
+        this.handleUnsubscribe(session, msg.subId ?? msg.symbol);
         break;
       default:
         this.send(ws, { type: 'error', code: 400, message: 'Unknown message type' });
@@ -112,10 +115,12 @@ export class WebSocketGateway {
     exchange: string,
     currency: string,
     timeframe: Timeframe,
-    useRTH: 0 | 1
+    useRTH: 0 | 1,
+    subId?: string
   ): void {
-    // Clean up any existing subscription for this symbol
-    this.handleUnsubscribe(session, symbol);
+    const key = subId ?? symbol;
+    // Clean up any existing subscription under this key (same panel re-subscribing)
+    this.handleUnsubscribe(session, key);
 
     if (!this.ibkr.isConnected) {
       this.send(ws, { type: 'error', code: 503, message: 'IBKR not connected' });
@@ -145,20 +150,20 @@ export class WebSocketGateway {
         useRTH
       );
 
-      session.subscriptions.set(symbol, unsubscribe);
-      this.logger.info({ symbol, timeframe, useRTH }, 'Client subscribed');
+      session.subscriptions.set(key, unsubscribe);
+      this.logger.info({ symbol, timeframe, useRTH, subId }, 'Client subscribed');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Subscription failed';
       this.send(ws, { type: 'error', code: 500, message });
     }
   }
 
-  private handleUnsubscribe(session: ClientSession, symbol: string): void {
-    const unsub = session.subscriptions.get(symbol);
+  private handleUnsubscribe(session: ClientSession, key: string): void {
+    const unsub = session.subscriptions.get(key);
     if (unsub) {
       unsub();
-      session.subscriptions.delete(symbol);
-      this.logger.info({ symbol }, 'Client unsubscribed');
+      session.subscriptions.delete(key);
+      this.logger.info({ key }, 'Client unsubscribed');
     }
   }
 
