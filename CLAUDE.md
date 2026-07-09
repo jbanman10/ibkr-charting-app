@@ -153,7 +153,10 @@ doesn't crash the dev server.
   tooling and would move the backend off 3001 (where the Vite proxy points). Keep it dedicated.
 - **One IBKR connection per `IBKR_CLIENT_ID`.** TWS rejects a second socket using the same client
   id. Don't run two backends at once (a terminal `npm run dev` plus a preview/launch) without
-  distinct client ids — symptom is "connects in one process, not the other".
+  distinct client ids — symptom is "connects in one process, not the other". The packaged exe uses
+  **port 3002 / client id 2** (dev uses 3001 / 1) so both stacks can run simultaneously; its
+  backend logs to `%APPDATA%/IBKR Chart/backend.log` and old `config.json`s on 3001/1 are
+  auto-migrated.
 - **Historical requests are serialized + pacing-aware.** `fetchHistoricalBars` and the
   `keepUpToDate` subscribe issuance queue through a promise chain (`histChain`) with a spacing gap.
   Concurrent direct requests otherwise get all-but-one rejected for pacing. Switching symbol/
