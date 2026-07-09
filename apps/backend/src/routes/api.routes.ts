@@ -59,6 +59,7 @@ const BarsQuerySchema = z.object({
   currency:  z.string().default('USD'),
   timeframe: z.enum(timeframeValues).default('1d'),
   useRTH:    z.coerce.number().int().min(0).max(1).default(0),
+  primaryExchange: z.string().optional(),
 });
 
 const SearchQuerySchema = z.object({
@@ -83,14 +84,14 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Invalid query', details: parsed.error.format() });
     }
 
-    const { symbol, secType, exchange, currency, timeframe, useRTH } = parsed.data;
+    const { symbol, secType, exchange, currency, timeframe, useRTH, primaryExchange } = parsed.data;
 
     if (!ibkr.isConnected) {
       return reply.status(503).send({ error: 'IBKR not connected' });
     }
 
     try {
-      const contract = MarketDataService.toIBContract(symbol, secType as SecType, exchange, currency);
+      const contract = MarketDataService.toIBContract(symbol, secType as SecType, exchange, currency, primaryExchange);
       const bars = await marketData.fetchHistoricalBars(contract, timeframe, useRTH as 0 | 1);
       app.log.info({ symbol, timeframe, useRTH, count: bars.length }, 'Bars served');
       return { symbol, timeframe, useRTH, bars };

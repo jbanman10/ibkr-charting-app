@@ -139,6 +139,12 @@ doesn't crash the dev server.
   retroactively fix a *closed* bar when IBKR folds in a late-reported print minutes later (common in
   pre-market). The frontend's jittered ~60s `/api/bars` re-sync corrects closed bars (so PMH/PML
   stay right) while keeping the live forming bar.
+- **Stock market data is always requested via `exchange=SMART` (consolidated tape).** A
+  single-venue exchange (e.g. NASDAQ) returns that venue's prints only — penny-different
+  highs/lows and gappier candles vs TWS/TV. The symbol search returns the LISTING exchange;
+  it goes into `primaryExchange` (contract disambiguation only, `primaryExch` on the IB
+  contract), never into `exchange`. `loadLayout` migrates old STK panels saved with a venue
+  exchange.
 - **Extended-hours snapshots are NBBO-clamped; RTH/live bars are raw.** `sanitizeExtendedBars`
   clamps pre/post-market snapshot bars to their minute's BID_ASK range (removing stale
   away-from-market prints that TWS also filters). It runs only on the initial snapshot and only for

@@ -512,8 +512,14 @@ export class MarketDataService {
     return null;
   }
 
-  /** Build an IBContract from our simplified Contract type. */
-  static toIBContract(symbol: string, secType: SecType, exchange: string, currency: string): IBContract {
-    return { symbol, secType: secType as IBSecType, exchange, currency };
+  /** Build an IBContract from our simplified Contract type.
+   * Market data must be requested via SMART (consolidated tape — what TWS/TV
+   * charts show); a single-venue exchange like NASDAQ returns that venue's
+   * prints only (penny-different highs/lows, gappier candles). The primary
+   * exchange is passed separately, purely to disambiguate the symbol. */
+  static toIBContract(symbol: string, secType: SecType, exchange: string, currency: string, primaryExchange?: string): IBContract {
+    const c: IBContract = { symbol, secType: secType as IBSecType, exchange, currency };
+    if (primaryExchange && primaryExchange !== 'SMART') c.primaryExch = primaryExchange;
+    return c;
   }
 }

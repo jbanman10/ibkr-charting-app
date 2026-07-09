@@ -120,7 +120,7 @@ export default function App() {
       ? focusedPanelId
       : layoutRef.current.panels[0]?.id;
     if (!id) return;
-    handlePanelChange(id, { symbol, secType: 'STK', exchange: 'SMART', currency: 'USD' });
+    handlePanelChange(id, { symbol, secType: 'STK', exchange: 'SMART', currency: 'USD', primaryExchange: undefined });
   }, [focusedPanelId, handlePanelChange]);
 
   const handleColumnResize = useCallback((sizes: number[]) => {

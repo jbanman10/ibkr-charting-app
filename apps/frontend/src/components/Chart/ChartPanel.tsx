@@ -103,7 +103,7 @@ interface Props {
   onPanelChange: (updates: Partial<PanelConfig>) => void;
   onClose?: () => void;
   canClose: boolean;
-  subscribe: (sym: string, secType: string, exchange: string, currency: string, tf: Timeframe, useRTH: 0 | 1 | undefined, subId: string) => void;
+  subscribe: (sym: string, secType: string, exchange: string, currency: string, tf: Timeframe, useRTH: 0 | 1 | undefined, subId: string, primaryExchange?: string) => void;
   unsubscribe: (sym: string, subId: string) => void;
   ibkrConnected: boolean;
   isFocused: boolean;
@@ -207,12 +207,12 @@ export default function ChartPanel({
     barsRef.current = [];
     formingRef.current = null;
     setBars([]);
-    subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1, panel.id);
+    subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1, panel.id, panel.primaryExchange);
     const t = setTimeout(() => {
       if (!gotSnapshotRef.current) { setError('No data received'); setLoading(false); }
     }, 30_000);
     return () => { clearTimeout(t); unsubscribe(panel.symbol, panel.id); };
-  }, [panel.id, panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [panel.id, panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Periodic history re-sync — a backstop for late-reported prints, IBKR's
   // penny-level history revisions, and the extended-hours NBBO clamp (via
@@ -242,6 +242,7 @@ export default function ChartPanel({
           timeframe: panel.timeframe,
           useRTH: String(panel.useRTH ?? 0),
         });
+        if (panel.primaryExchange) params.set('primaryExchange', panel.primaryExchange);
         const res = await fetch(`/api/bars?${params}`, { signal: ctrl.signal });
         if (!res.ok) return;
         const body = (await res.json()) as { bars?: Bar[] };
@@ -265,7 +266,7 @@ export default function ChartPanel({
     const onVisible = () => { if (document.visibilityState === 'visible') void resync(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { ctrl.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
-  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, panel.indicators, recomputeSessions]);
+  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, panel.indicators, recomputeSessions]);
 
   // ─── Stream handlers (snapshot / bar_update / bar_close) ───────────────────
   //
@@ -407,10 +408,16 @@ export default function ChartPanel({
 
   const handleSymbolSelect = useCallback((result: ContractSearchResult) => {
     unsubscribe(panel.symbol, panel.id);
+    // Stocks always pull data via SMART (consolidated tape, matches TWS/TV);
+    // the search result's exchange is the LISTING exchange (e.g. NASDAQ) and is
+    // kept only to disambiguate the symbol. Requesting data from a single venue
+    // yields penny-different highs/lows and gappier candles.
+    const stk = result.secType === 'STK';
     onPanelChange({
       symbol: result.symbol,
       secType: result.secType,
-      exchange: result.exchange || 'SMART',
+      exchange: stk ? 'SMART' : (result.exchange || 'SMART'),
+      primaryExchange: stk && result.exchange && result.exchange !== 'SMART' ? result.exchange : undefined,
       currency: result.currency,
     });
   }, [panel.symbol, panel.id, unsubscribe, onPanelChange]);
