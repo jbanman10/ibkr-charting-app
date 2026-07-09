@@ -14,43 +14,64 @@ const fs = require('node:fs');
 const http = require('node:http');
 
 const isDev = !app.isPackaged;
-const BACKEND_PORT = Number(process.env.BACKEND_PORT ?? 3001);
 const DEV_URL = 'http://localhost:5173';
-const PROD_URL = `http://127.0.0.1:${BACKEND_PORT}`;
 
 let backendProc = null;
 let nextWinId = 1;
+let userCfg = null; // loaded once in app.whenReady
 
 // ─── User config (packaged app) ──────────────────────────────────────────────
 // Read/create <userData>/config.json so the user can point at live vs paper
 // without rebuilding. Shipped defaults = paper trading on localhost.
+//
+// Port 3002 / client id 2 — deliberately NOT the dev stack's 3001 / client 1,
+// so the exe and `npm run dev` can run at the same time without stealing each
+// other's port or TWS connection (the collision shows up as "No data received"
+// and windows served by the wrong backend).
 function loadUserConfig() {
   const cfgPath = path.join(app.getPath('userData'), 'config.json');
   const defaults = {
-    BACKEND_PORT: String(BACKEND_PORT),
+    BACKEND_PORT: process.env.BACKEND_PORT ?? '3002',
     IBKR_HOST: '127.0.0.1',
     IBKR_PORT: '7497',
-    IBKR_CLIENT_ID: '1',
+    IBKR_CLIENT_ID: '2',
   };
   try {
     if (!fs.existsSync(cfgPath)) {
       fs.writeFileSync(cfgPath, JSON.stringify(defaults, null, 2));
       return defaults;
     }
-    return { ...defaults, ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')) };
+    const cfg = { ...defaults, ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')) };
+    // Migrate configs still on the OLD shipped defaults (3001 / client 1):
+    // they collide with the dev stack. Any other values are a deliberate
+    // user choice and are left alone.
+    if (cfg.BACKEND_PORT === '3001' && cfg.IBKR_CLIENT_ID === '1') {
+      cfg.BACKEND_PORT = defaults.BACKEND_PORT;
+      cfg.IBKR_CLIENT_ID = defaults.IBKR_CLIENT_ID;
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+    }
+    return cfg;
   } catch {
     return defaults;
   }
 }
 
+const prodUrl = () => `http://127.0.0.1:${userCfg?.BACKEND_PORT ?? '3002'}`;
+
 // ─── Backend lifecycle ────────────────────────────────────────────────────────
 function startBackend() {
   if (isDev) return; // dev: backend is started by `npm run dev`
 
-  const userCfg = loadUserConfig();
   // extraResources land under process.resourcesPath in the packaged app.
   const backendEntry = path.join(process.resourcesPath, 'backend', 'backend.cjs');
   const frontendDist = path.join(process.resourcesPath, 'frontend-dist');
+
+  // Backend output goes to <userData>/backend.log — in a packaged app there is
+  // no console, and without this a crash (port in use, TWS rejects the client
+  // id, …) is invisible. Truncated each launch.
+  const logPath = path.join(app.getPath('userData'), 'backend.log');
+  let logFd = null;
+  try { logFd = fs.openSync(logPath, 'w'); } catch { /* logging is best-effort */ }
 
   backendProc = spawn(process.execPath, [backendEntry], {
     env: {
@@ -61,11 +82,12 @@ function startBackend() {
       SERVE_STATIC: '1',
       FRONTEND_DIST: frontendDist,
     },
-    stdio: 'inherit',
+    stdio: logFd != null ? ['ignore', logFd, logFd] : 'ignore',
   });
 
   backendProc.on('exit', (code) => {
     console.error(`[desktop] backend exited with code ${code}`);
+    if (logFd != null) { try { fs.writeSync(logFd, `\n[desktop] backend exited with code ${code}\n`); } catch { /* ignore */ } }
     backendProc = null;
   });
 }
@@ -113,7 +135,7 @@ function createWindow() {
     },
   });
 
-  const base = isDev ? DEV_URL : PROD_URL;
+  const base = isDev ? DEV_URL : prodUrl();
   win.loadURL(`${base}/?win=${winId}`);
 
   // Open external links (e.g. docs) in the OS browser, never a new app window.
@@ -157,6 +179,7 @@ function buildMenu() {
 
 // ─── App lifecycle ──────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
+  userCfg = loadUserConfig();
   buildMenu();
   startBackend();
 
@@ -166,7 +189,7 @@ app.whenReady().then(async () => {
   // every launch is free and guarantees each launch runs the shipped build.
   try { await session.defaultSession.clearCache(); } catch { /* non-fatal */ }
 
-  const readyUrl = isDev ? DEV_URL : `${PROD_URL}/api/status`;
+  const readyUrl = isDev ? DEV_URL : `${prodUrl()}/api/status`;
   try {
     await waitForHttp(readyUrl);
   } catch (err) {
