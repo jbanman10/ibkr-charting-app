@@ -103,8 +103,8 @@ interface Props {
   onPanelChange: (updates: Partial<PanelConfig>) => void;
   onClose?: () => void;
   canClose: boolean;
-  subscribe: (sym: string, secType: string, exchange: string, currency: string, tf: Timeframe, useRTH?: 0 | 1) => void;
-  unsubscribe: (sym: string) => void;
+  subscribe: (sym: string, secType: string, exchange: string, currency: string, tf: Timeframe, useRTH: 0 | 1 | undefined, subId: string) => void;
+  unsubscribe: (sym: string, subId: string) => void;
   ibkrConnected: boolean;
   isFocused: boolean;
   onFocus: () => void;
@@ -134,6 +134,7 @@ export default function ChartPanel({
   const gotSnapshotRef = useRef(false);         // has the initial snapshot arrived for this sub?
   const quoteRef = useRef({ bid: 0, ask: 0, last: 0 }); // running quote from sparse ticks
   const rafRef = useRef<number | null>(null);           // coalesce tick repaints to 1/frame
+  const lastFeedRef = useRef(0); // last authoritative snapshot/bar_update/bar_close (ms)
   const [showIndicators, setShowIndicators] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -206,12 +207,12 @@ export default function ChartPanel({
     barsRef.current = [];
     formingRef.current = null;
     setBars([]);
-    subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1);
+    subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1, panel.id);
     const t = setTimeout(() => {
       if (!gotSnapshotRef.current) { setError('No data received'); setLoading(false); }
     }, 30_000);
-    return () => { clearTimeout(t); unsubscribe(panel.symbol); };
-  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { clearTimeout(t); unsubscribe(panel.symbol, panel.id); };
+  }, [panel.id, panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Periodic history re-sync — a backstop for late-reported prints and the
   // extended-hours NBBO clamp (via /api/bars). The backend's on-rollover
@@ -288,7 +289,11 @@ export default function ChartPanel({
     // timeframe (incl. RTH-offset 1h bars), not just epoch-aligned ones.
     const tfSec = TIMEFRAMES[panel.timeframe].seconds;
     const nowSec = Math.floor(Date.now() / 1000);
-    if (nowSec - Number(base.time) >= tfSec) {
+    // Never fabricate candles from ticks alone: if the authoritative keepUpToDate
+    // feed has gone quiet (dead/stomped stream), skip the local rollover — a
+    // tick-only chart drifts into malformed, gappy candles.
+    const feedFresh = Date.now() - lastFeedRef.current < 120_000;
+    if (feedFresh && nowSec - Number(base.time) >= tfSec) {
       const steps = Math.floor((nowSec - Number(base.time)) / tfSec);
       const newTime = Number(base.time) + steps * tfSec;
       // Keep the just-finalized bar in the closed-bar history so overlays/session
@@ -322,6 +327,7 @@ export default function ChartPanel({
   useEffect(() => {
     snapshotHandlerRef.current = (symbol: string, snap: Bar[], tf?: Timeframe) => {
       if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
+      lastFeedRef.current = Date.now();
       gotSnapshotRef.current = true;
       barsRef.current = snap;
       formingRef.current = snap.length ? { ...snap[snap.length - 1] } : null;
@@ -333,6 +339,7 @@ export default function ChartPanel({
 
     barUpdateRef.current = (symbol: string, bar: Bar, tf?: Timeframe) => {
       if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
+      lastFeedRef.current = Date.now();
       formingRef.current = { ...bar };
       chartRef.current?.updateBar(bar);
       recomputeSessions();
@@ -340,6 +347,7 @@ export default function ChartPanel({
 
     barCloseRef.current = (symbol: string, bar: Bar, tf?: Timeframe) => {
       if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
+      lastFeedRef.current = Date.now();
       const bars = barsRef.current;
       const idx = bars.findIndex((b) => Number(b.time) === Number(bar.time));
       if (idx >= 0) {
@@ -387,14 +395,14 @@ export default function ChartPanel({
   // ─── UI handlers ──────────────────────────────────────────────────────────
 
   const handleSymbolSelect = useCallback((result: ContractSearchResult) => {
-    unsubscribe(panel.symbol);
+    unsubscribe(panel.symbol, panel.id);
     onPanelChange({
       symbol: result.symbol,
       secType: result.secType,
       exchange: result.exchange || 'SMART',
       currency: result.currency,
     });
-  }, [panel.symbol, unsubscribe, onPanelChange]);
+  }, [panel.symbol, panel.id, unsubscribe, onPanelChange]);
 
   // Drawings live in a per-symbol store so they appear on every chart of this
   // symbol (any timeframe / any panel), lined up by absolute time.

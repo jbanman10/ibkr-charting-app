@@ -59,6 +59,8 @@ Four workspaces:
   - `hooks/useMarketStream.ts` — `/ws` client with auto-reconnect; tracks all active subscriptions
     and re-subscribes **every** panel on reconnect. Routes `snapshot` / `bar_update` / `bar_close` /
     `tick` to per-panel DOM-attached handlers (`__snapshotHandler`, `__barUpdateHandler`, …).
+    Subscriptions are keyed by a per-panel `subId` end-to-end (hook + `ws.gateway`) — never by
+    symbol alone, or two panels showing the same symbol stomp/kill each other's stream.
   - `hooks/useHistoricalBars.ts` — legacy REST `GET /api/bars` hook; **no longer used by the chart**
     (the chart is snapshot-driven over WS) — the ~60s re-sync in `ChartPanel` calls `/api/bars` directly.
   - `hooks/useSymbolDrawings.ts` + `lib/drawingStore.ts` — drawings are stored **per symbol**

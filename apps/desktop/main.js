@@ -7,7 +7,7 @@
 // keep working unchanged. In dev we assume `npm run dev` is already running
 // (backend :3001 + Vite :5173) and only open windows.
 
-const { app, BrowserWindow, Menu, shell } = require('electron');
+const { app, BrowserWindow, Menu, shell, session } = require('electron');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
@@ -159,6 +159,12 @@ function buildMenu() {
 app.whenReady().then(async () => {
   buildMenu();
   startBackend();
+
+  // The frontend is served over HTTP from the local backend, so Chromium's HTTP
+  // cache applies — a cached index.html from a previous install can pin an old
+  // JS bundle and silently run stale code. Assets are local, so clearing on
+  // every launch is free and guarantees each launch runs the shipped build.
+  try { await session.defaultSession.clearCache(); } catch { /* non-fatal */ }
 
   const readyUrl = isDev ? DEV_URL : `${PROD_URL}/api/status`;
   try {
