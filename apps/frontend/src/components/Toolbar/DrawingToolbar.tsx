@@ -50,6 +50,18 @@ const TOOLS: Tool[] = [
       </svg>
     ),
   },
+  {
+    type: 'position',
+    label: 'Pos',
+    title: 'Position (click at entry; drag stop/target — target below entry = short)',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <rect x="1.5" y="2" width="11" height="5" fill="rgba(8,153,129,0.35)" stroke="#089981" strokeWidth="1"/>
+        <rect x="1.5" y="7" width="11" height="3.5" fill="rgba(242,54,69,0.35)" stroke="#f23645" strokeWidth="1"/>
+        <line x1="1.5" y1="7" x2="12.5" y2="7" stroke="currentColor" strokeWidth="1.3"/>
+      </svg>
+    ),
+  },
 ];
 
 interface Props {

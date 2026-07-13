@@ -247,12 +247,17 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
 
       onReady?.();
 
-      // Resize observer
+      // Resize observer. Never re-fit on resize — that yanks the user's view
+      // every time the layout shifts (opening the watchlist, grid drags, …).
+      // 1m charts stay glued to the live edge (current price); other timeframes
+      // keep whatever view the user had.
       const ro = new ResizeObserver(() => {
         const w = el.clientWidth;
         const h = el.clientHeight;
+        const vr = chart.timeScale().getVisibleLogicalRange();
         chart.applyOptions({ width: w, height: h });
-        chart.timeScale().fitContent();
+        if (tfRef.current === '1m') chart.timeScale().scrollToRealTime();
+        else if (vr) chart.timeScale().setVisibleLogicalRange(vr);
         setDims({ w, h });
       });
       ro.observe(el);
@@ -328,7 +333,15 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         candle.setData(built.cd);
         volume.setData(built.vd);
         lastTimeRef.current = built.lastTime;
-        chart.timeScale().fitContent();
+        // 1m: open on the last ~3 hours anchored to the live edge (fitContent
+        // over 2 days of 1m bars is unreadably zoomed out). Other timeframes
+        // fit the full history as before.
+        if (tfRef.current === '1m') {
+          const n = built.cd.length;
+          chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 180), to: n + 6 });
+        } else {
+          chart.timeScale().fitContent();
+        }
         console.log('[ChartContainer] Rendered', built.cd.length, 'bars');
       } catch (err) {
         console.error('[ChartContainer] setData error:', err);

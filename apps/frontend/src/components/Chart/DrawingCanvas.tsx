@@ -33,6 +33,7 @@ import {
   newDrawingId,
   plotRight,
   timeToUnix,
+  xToTimeAnchored,
   DRAWING_COLORS,
 } from '../../lib/drawings';
 
@@ -70,6 +71,7 @@ type Interaction =
 
 function cursorForHandle(handle: ResizeHandle, type: Drawing['type']): string {
   if (type === 'trendline') return 'move';
+  if (type === 'position') return handle === 'right' ? 'ew-resize' : 'ns-resize';
   // Rectangle corners: diagonal resize cursors.
   if (handle === 'tl' || handle === 'br') return 'nwse-resize';
   return 'nesw-resize';
@@ -78,6 +80,13 @@ function cursorForHandle(handle: ResizeHandle, type: Drawing['type']): string {
 /** Move an entire drawing by a logical (time/price) delta. */
 function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
   if (d.type === 'hline') return { ...d, price: d.price + dPrice };
+  if (d.type === 'position') {
+    return {
+      ...d,
+      time1: d.time1 + dTime, time2: d.time2 + dTime,
+      entry: d.entry + dPrice, stop: d.stop + dPrice, target: d.target + dPrice,
+    };
+  }
   const shift = (p: DrawingPoint): DrawingPoint => ({ time: p.time + dTime, price: p.price + dPrice });
   return { ...d, p1: shift(d.p1), p2: shift(d.p2) } as Drawing;
 }
@@ -86,6 +95,15 @@ function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
 function applyResize(d: Drawing, handle: ResizeHandle, logical: DrawingPoint): Drawing {
   if (d.type === 'trendline') {
     return handle === 'p1' ? { ...d, p1: logical } : { ...d, p2: logical };
+  }
+  if (d.type === 'position') {
+    switch (handle) {
+      case 'entry':  return { ...d, entry: logical.price };
+      case 'stop':   return { ...d, stop: logical.price };
+      case 'target': return { ...d, target: logical.price };
+      case 'right':  return { ...d, time2: Math.max(logical.time, d.time1 + 1) };
+      default:       return d;
+    }
   }
   if (d.type === 'rectangle') {
     const tLeft = Math.min(d.p1.time, d.p2.time);
@@ -173,7 +191,12 @@ export default function DrawingCanvas({
     const price = priceSeries.coordinateToPrice(px.y);
     if (price === null) return null;
     const rawT = chart.timeScale().coordinateToTime(px.x);
-    const time: number | null = rawT !== null ? timeToUnix(rawT) : (dataTimeRange ? dataTimeRange.last : null);
+    // In the whitespace right of the last bar, extrapolate a real future time
+    // (so e.g. a position's right edge can be dragged out as far as wanted)
+    // instead of snapping to the last bar.
+    const time: number | null = rawT !== null
+      ? timeToUnix(rawT)
+      : xToTimeAnchored(chart, px.x, dataTimeRange) ?? (dataTimeRange ? dataTimeRange.last : null);
     if (time === null) return null;
     const logical: DrawingPoint = { time, price };
 
@@ -279,6 +302,34 @@ export default function DrawingCanvas({
       return;
     }
 
+    if (activeTool === 'position') {
+      // One click places a long position at the click price, spanning ~20 bars.
+      // Default risk scales with recent volatility (2× the average bar range of
+      // the last 20 bars) so it's tight on a 1m chart and sensible on a daily;
+      // target = 2R. Drag the handles (or edit the numbers via double-click
+      // settings) to adjust; drag target below entry for a short.
+      let barSec = 60;
+      let risk = logical.price * 0.005; // fallback when no bars are loaded
+      if (bars.length >= 2) {
+        barSec = Math.max(1, Number(bars[bars.length - 1].time) - Number(bars[bars.length - 2].time));
+        const recent = bars.slice(-20);
+        const avgRange = recent.reduce((a, b) => a + (Number(b.high) - Number(b.low)), 0) / recent.length;
+        if (avgRange > 0) risk = avgRange * 2;
+      }
+      const id = newDrawingId();
+      const entry = logical.price;
+      onDrawingsChange([...drawingsRef.current, {
+        id, type: 'position',
+        time1: logical.time, time2: logical.time + barSec * 20,
+        entry,
+        stop: Number((entry - risk).toFixed(2)),
+        target: Number((entry + risk * 2).toFixed(2)),
+      }]);
+      onSelect?.(id);
+      onDrawingComplete?.();
+      return;
+    }
+
     if (!firstPoint) {
       // First anchor down — start a create drag (also works as first click).
       setFirstPoint(logical);
@@ -293,7 +344,7 @@ export default function DrawingCanvas({
       // Second click (two-click fallback).
       commitCreate(firstPoint, logical, px);
     }
-  }, [activeTool, hover, selectedId, firstPoint, getLogical, getPixel, computeHover, onDragChange, onDrawingsChange, onDrawingComplete, onSelect, rectColor, commitCreate]);
+  }, [activeTool, hover, selectedId, firstPoint, bars, getLogical, getPixel, computeHover, onDragChange, onDrawingsChange, onDrawingComplete, onSelect, rectColor, commitCreate]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     const logical = getLogical(e);
