@@ -22,6 +22,7 @@ const TITLES: Record<Drawing['type'], string> = {
   trendline: 'Trend Line',
   hline: 'Horizontal Line',
   rectangle: 'Rectangle',
+  position: 'Position',
 };
 
 const WIDTHS = [1, 2, 3, 4];
@@ -34,6 +35,56 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function DrawingSettings({ drawing, onChange, onDelete, onClose }: Props) {
+  // Position tool: fixed colors (green/red zones), numeric price fields instead.
+  if (drawing.type === 'position') {
+    const risk = Math.abs(drawing.entry - drawing.stop);
+    const reward = Math.abs(drawing.target - drawing.entry);
+    const rr = risk > 1e-9 ? reward / risk : 0;
+    const numRow = (label: string, key: 'entry' | 'stop' | 'target') => (
+      <div className={styles.row}>
+        <span className={styles.label}>{label}</span>
+        <input
+          className={styles.numInput}
+          type="number"
+          step="0.01"
+          value={drawing[key]}
+          onChange={(e) => {
+            const v = parseFloat(e.target.value);
+            if (Number.isFinite(v)) onChange({ [key]: v } as Partial<Drawing>);
+          }}
+        />
+      </div>
+    );
+    return (
+      <div
+        className={styles.root}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className={styles.header}>
+          <span className={styles.title}>
+            {TITLES.position} {drawing.target >= drawing.entry ? '(Long)' : '(Short)'}
+          </span>
+          <button className={styles.closeBtn} onClick={onClose} title="Close (Esc)">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+              <path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
+        {numRow('Entry', 'entry')}
+        {numRow('Target', 'target')}
+        {numRow('Stop', 'stop')}
+        <div className={styles.row}>
+          <span className={styles.label}>R : R</span>
+          <span className={styles.rrValue}>{rr.toFixed(2)}</span>
+        </div>
+        <div className={styles.footer}>
+          <button className={styles.deleteBtn} onClick={onDelete}>Delete drawing</button>
+        </div>
+      </div>
+    );
+  }
+
   const color = drawing.type === 'rectangle' ? drawing.borderColor : drawing.color;
   const width = drawing.type === 'rectangle' ? (drawing.borderWidth ?? 1) : drawing.width;
   const dashed = drawing.type === 'rectangle' ? false : !!drawing.dashed;

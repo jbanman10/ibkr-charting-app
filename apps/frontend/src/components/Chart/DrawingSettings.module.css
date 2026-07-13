@@ -159,3 +159,28 @@
 }
 
 .deleteBtn:hover { background: var(--candle-down-dim); }
+
+/* ─── Position tool ──────────────────────────────────────────────────────── */
+
+.numInput {
+  width: 92px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border-muted);
+  border-radius: 5px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.numInput:focus { border-color: var(--accent); }
+
+.rrValue {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}

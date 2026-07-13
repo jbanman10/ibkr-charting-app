@@ -19,7 +19,7 @@ import type { Time } from 'lightweight-charts';
 
 // ─── Serialisable drawing types ───────────────────────────────────────────────
 
-export type DrawingToolType = 'trendline' | 'hline' | 'rectangle' | 'none';
+export type DrawingToolType = 'trendline' | 'hline' | 'rectangle' | 'position' | 'none';
 
 export interface DrawingPoint {
   time: number;   // Unix seconds
@@ -58,7 +58,20 @@ export interface RectangleDrawing {
   extendRight?: boolean; // open the right edge to the chart edge (and beyond)
 }
 
-export type Drawing = TrendLineDrawing | HLineDrawing | RectangleDrawing;
+// TradingView-style long/short position: entry line with a green reward zone
+// (entry ↔ target) and a red risk zone (entry ↔ stop). Direction is implied by
+// where target/stop sit relative to entry (target above = long, below = short).
+export interface PositionDrawing {
+  id: string;
+  type: 'position';
+  time1: number;  // left edge (unix seconds)
+  time2: number;  // right edge (unix seconds)
+  entry: number;
+  stop: number;
+  target: number;
+}
+
+export type Drawing = TrendLineDrawing | HLineDrawing | RectangleDrawing | PositionDrawing;
 
 // ─── Coordinate helpers ───────────────────────────────────────────────────────
 
@@ -109,6 +122,57 @@ export function timeToX(
   if (time <= range.first) return 0;
   if (time >= range.last) return width;
   return interpolateX(chart, time); // in-range but not directly mappable
+}
+
+/**
+ * Like timeToX, but a time beyond the last loaded bar EXTRAPOLATES at the
+ * current px-per-second (measured near the right edge) instead of clamping to
+ * the chart edge. Position boxes use this so a fixed-width box keeps its real
+ * width when it reaches into the future, rather than visually pinning to the
+ * right edge of the chart.
+ */
+export function timeToXAnchored(
+  chart: IChartApi,
+  time: number,
+  range: DataTimeRange | null,
+  width: number
+): number | null {
+  const ts = chart.timeScale();
+  const c = ts.timeToCoordinate(time as Time);
+  if (c !== null) return c;
+  if (range && time > range.last) {
+    const lastX = timeToX(chart, range.last, range, width);
+    if (lastX !== null) {
+      const probePx = 80;
+      const tProbe = ts.coordinateToTime(lastX - probePx);
+      if (tProbe !== null) {
+        const secPerPx = (range.last - timeToUnix(tProbe)) / probePx;
+        if (secPerPx > 0) return lastX + (time - range.last) / secPerPx;
+      }
+    }
+  }
+  return timeToX(chart, time, range, width);
+}
+
+/**
+ * Inverse of timeToXAnchored: map an x pixel PAST the last bar back to an
+ * extrapolated unix time (coordinateToTime returns null in the future
+ * whitespace). Lets drags — e.g. a position's right-edge handle — reach as far
+ * right as the user wants instead of snapping to the last bar.
+ */
+export function xToTimeAnchored(chart: IChartApi, x: number, range: DataTimeRange | null): number | null {
+  const ts = chart.timeScale();
+  const t = ts.coordinateToTime(x);
+  if (t !== null) return timeToUnix(t);
+  if (!range) return null;
+  const lastX = timeToX(chart, range.last, range, Number.MAX_SAFE_INTEGER);
+  if (lastX === null || x <= lastX) return null;
+  const probePx = 80;
+  const tProbe = ts.coordinateToTime(lastX - probePx);
+  if (tProbe === null) return null;
+  const secPerPx = (range.last - timeToUnix(tProbe)) / probePx;
+  if (secPerPx <= 0) return null;
+  return Math.round(range.last + (x - lastX) * secPerPx);
 }
 
 function interpolateX(chart: IChartApi, time: number): number | null {
@@ -166,6 +230,20 @@ export function hitTestDrawing(
     return Math.abs(px.y - y) < HIT_RADIUS;
   }
 
+  if (drawing.type === 'position') {
+    const edge = plotRight(chart, width);
+    const x1 = timeToXAnchored(chart, drawing.time1, range, edge);
+    const x2 = timeToXAnchored(chart, drawing.time2, range, edge);
+    const yE = series.priceToCoordinate(drawing.entry);
+    const yS = series.priceToCoordinate(drawing.stop);
+    const yT = series.priceToCoordinate(drawing.target);
+    if (x1 === null || x2 === null || yE === null || yS === null || yT === null) return false;
+    const minY = Math.min(yE, yS, yT) - HIT_RADIUS;
+    const maxY = Math.max(yE, yS, yT) + HIT_RADIUS;
+    return px.x >= Math.min(x1, x2) - HIT_RADIUS && px.x <= Math.max(x1, x2) + HIT_RADIUS
+        && px.y >= minY && px.y <= maxY;
+  }
+
   if (drawing.type === 'trendline' || drawing.type === 'rectangle') {
     const edge = plotRight(chart, width);
     const a = toPixel(chart, drawing.p1, series, range, edge);
@@ -191,8 +269,9 @@ export function hitTestDrawing(
 // ─── Resize handles ─────────────────────────────────────────────────────────
 
 // Which grab point a resize drag is manipulating. Trendlines expose their two
-// endpoints; rectangles expose their four visual corners.
-export type ResizeHandle = 'p1' | 'p2' | 'tl' | 'tr' | 'bl' | 'br';
+// endpoints; rectangles expose their four visual corners; positions expose
+// their three price lines plus a right-edge width handle.
+export type ResizeHandle = 'p1' | 'p2' | 'tl' | 'tr' | 'bl' | 'br' | 'entry' | 'stop' | 'target' | 'right';
 
 const HANDLE_HIT = 9; // px tolerance for grabbing a resize handle
 
@@ -231,6 +310,21 @@ export function hitResizeHandle(
     if (near(xR, yT)) return 'tr';
     if (near(xL, yB)) return 'bl';
     if (near(xR, yB)) return 'br';
+    return null;
+  }
+
+  if (drawing.type === 'position') {
+    const x1 = timeToXAnchored(chart, drawing.time1, range, edge);
+    const x2 = timeToXAnchored(chart, drawing.time2, range, edge);
+    const yE = series.priceToCoordinate(drawing.entry);
+    const yS = series.priceToCoordinate(drawing.stop);
+    const yT = series.priceToCoordinate(drawing.target);
+    if (x1 === null || x2 === null || yE === null || yS === null || yT === null) return null;
+    const midX = (x1 + x2) / 2;
+    if (near(midX, yT)) return 'target';
+    if (near(midX, yS)) return 'stop';
+    if (near(midX, yE)) return 'entry';
+    if (near(Math.max(x1, x2), yE)) return 'right';
     return null;
   }
 
@@ -283,6 +377,8 @@ export function renderDrawings(
       renderTrendLine(ctx, d, chart, series, rightEdge, height, isSelected, range);
     } else if (d.type === 'rectangle') {
       renderRectangle(ctx, d, chart, series, isSelected, rightEdge, range);
+    } else if (d.type === 'position') {
+      renderPosition(ctx, d, chart, series, isSelected, rightEdge, range);
     }
 
     ctx.restore();
@@ -401,6 +497,71 @@ function renderRectangle(
   if (selected) {
     drawHandle(ctx, a.x, a.y, d.borderColor);
     drawHandle(ctx, b.x, b.y, d.borderColor);
+  }
+}
+
+const POS_GREEN = '#089981';
+const POS_RED   = '#f23645';
+const POS_GRAY  = '#b2b5be';
+
+function renderPosition(
+  ctx: CanvasRenderingContext2D,
+  d: PositionDrawing,
+  chart: IChartApi,
+  series: { priceToCoordinate: (p: number) => number | null },
+  selected: boolean,
+  width: number,
+  range: DataTimeRange | null
+): void {
+  const x1r = timeToXAnchored(chart, d.time1, range, width);
+  const x2r = timeToXAnchored(chart, d.time2, range, width);
+  const yE = series.priceToCoordinate(d.entry);
+  const yS = series.priceToCoordinate(d.stop);
+  const yT = series.priceToCoordinate(d.target);
+  if (x1r === null || x2r === null || yE === null || yS === null || yT === null) return;
+
+  const x = Math.min(x1r, x2r);
+  const w = Math.abs(x2r - x1r);
+  if (w < 1) return;
+
+  // Reward zone (entry ↔ target) and risk zone (entry ↔ stop).
+  ctx.fillStyle = 'rgba(8,153,129,0.16)';
+  ctx.fillRect(x, Math.min(yE, yT), w, Math.abs(yT - yE));
+  ctx.fillStyle = 'rgba(242,54,69,0.16)';
+  ctx.fillRect(x, Math.min(yE, yS), w, Math.abs(yS - yE));
+
+  const hLine = (y: number, color: string) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = selected ? 2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w, y);
+    ctx.stroke();
+  };
+  hLine(yT, POS_GREEN);
+  hLine(yS, POS_RED);
+  hLine(yE, POS_GRAY);
+
+  // Labels: target with reward + R multiple, stop with risk, entry price.
+  const risk = Math.abs(d.entry - d.stop);
+  const reward = Math.abs(d.target - d.entry);
+  const rr = risk > 1e-9 ? reward / risk : 0;
+  ctx.font = '10px JetBrains Mono, monospace';
+  const towardTarget = yT < yE ? -4 : 11;  // put text just outside each line, inside its zone
+  const towardStop = yS > yE ? 11 : -4;
+  ctx.fillStyle = POS_GREEN;
+  ctx.fillText(`${d.target.toFixed(2)}  +${reward.toFixed(2)}  (${rr.toFixed(2)}R)`, x + 5, yT + towardTarget);
+  ctx.fillStyle = POS_RED;
+  ctx.fillText(`${d.stop.toFixed(2)}  -${risk.toFixed(2)}`, x + 5, yS + towardStop);
+  ctx.fillStyle = POS_GRAY;
+  ctx.fillText(d.entry.toFixed(2), x + 5, yE - 4);
+
+  if (selected) {
+    const midX = x + w / 2;
+    drawHandle(ctx, midX, yT, POS_GREEN);
+    drawHandle(ctx, midX, yS, POS_RED);
+    drawHandle(ctx, midX, yE, POS_GRAY);
+    drawHandle(ctx, x + w, yE, POS_GRAY); // width handle
   }
 }
 
