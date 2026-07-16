@@ -23,6 +23,7 @@ const TITLES: Record<Drawing['type'], string> = {
   hline: 'Horizontal Line',
   rectangle: 'Rectangle',
   position: 'Position',
+  alert: 'Price Alert',
 };
 
 const WIDTHS = [1, 2, 3, 4];
@@ -35,6 +36,53 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 export default function DrawingSettings({ drawing, onChange, onDelete, onClose }: Props) {
+  // Price alert: level + armed/triggered state. Editing the price re-arms it.
+  if (drawing.type === 'alert') {
+    const armed = !drawing.triggeredAt;
+    return (
+      <div
+        className={styles.root}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className={styles.header}>
+          <span className={styles.title}>{TITLES.alert} {armed ? '(Armed)' : '(Triggered ✓)'}</span>
+          <button className={styles.closeBtn} onClick={onClose} title="Close (Esc)">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+              <path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <div className={styles.row}>
+          <span className={styles.label}>Price</span>
+          <input
+            className={styles.numInput}
+            type="number"
+            step="0.01"
+            value={drawing.price}
+            onChange={(e) => {
+              const v = parseFloat(e.target.value);
+              if (Number.isFinite(v)) onChange({ price: v, triggeredAt: null } as Partial<Drawing>);
+            }}
+          />
+        </div>
+        {!armed && (
+          <div className={styles.row}>
+            <span className={styles.label}>Status</span>
+            <div className={styles.btnGroup}>
+              <button className={styles.opt} onClick={() => onChange({ triggeredAt: null } as Partial<Drawing>)}>
+                Re-arm
+              </button>
+            </div>
+          </div>
+        )}
+        <div className={styles.footer}>
+          <button className={styles.deleteBtn} onClick={onDelete}>Delete alert</button>
+        </div>
+      </div>
+    );
+  }
+
   // Position tool: fixed colors (green/red zones), numeric price fields instead.
   if (drawing.type === 'position') {
     const risk = Math.abs(drawing.entry - drawing.stop);

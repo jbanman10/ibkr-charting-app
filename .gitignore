@@ -32,3 +32,4 @@ desktop.ini
 
 # ─── Stale nested duplicate of the project (see CLAUDE.md) — not source ──────
 ibkr-chart/
+.data

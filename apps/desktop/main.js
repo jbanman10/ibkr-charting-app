@@ -81,6 +81,9 @@ function startBackend() {
       NODE_ENV: 'production',
       SERVE_STATIC: '1',
       FRONTEND_DIST: frontendDist,
+      // File-backed stores (drawings.json, …) live in userData so they survive
+      // reinstalls, cache clears, and origin/port changes.
+      DATA_DIR: app.getPath('userData'),
     },
     stdio: logFd != null ? ['ignore', logFd, logFd] : 'ignore',
   });
