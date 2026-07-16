@@ -9,6 +9,7 @@ import { MarketDataService } from './services/market-data.service.js';
 import { WebSocketGateway } from './services/ws.gateway.js';
 import { registerRoutes } from './routes/api.routes.js';
 import { registerSummaryRoutes } from './routes/summary.routes.js';
+import { registerStoreRoutes } from './routes/store.routes.js';
 import { registerWsRoute } from './routes/ws.routes.js';
 
 // ─── Logger setup — pino-pretty only if it's available, plain JSON otherwise ─
@@ -36,7 +37,7 @@ async function bootstrap(): Promise<void> {
   // ─── Plugins ────────────────────────────────────────────────────────────────
   await app.register(cors, {
     origin: config.server.corsOrigin,
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
   });
 
   await app.register(websocket);
@@ -49,6 +50,7 @@ async function bootstrap(): Promise<void> {
   // ─── Routes ──────────────────────────────────────────────────────────────────
   await registerRoutes(app);
   await registerSummaryRoutes(app);
+  await registerStoreRoutes(app);
   await registerWsRoute(app);
 
   // ─── Static frontend (Electron / production) ──────────────────────────────────

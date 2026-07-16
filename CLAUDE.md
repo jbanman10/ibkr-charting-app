@@ -53,7 +53,9 @@ Four workspaces:
   - Routes: `routes/api.routes.ts` (`/api/status`, `/api/bars`, `/api/search`, `/api/quotes` —
     batch watchlist quotes: last/change/%/today-volume from 2-day 1-min bars, per-symbol errors
     inline), `routes/summary.routes.ts` (`/api/summary` — SPY/QQQ quotes via IBKR + ForexFactory
-    econ calendar + CNBC RSS, each independently cached), `routes/ws.routes.ts` (`/ws`).
+    econ calendar + CNBC RSS, each independently cached), `routes/store.routes.ts`
+    (`GET/PUT /api/store/:key` — file-backed persistence for client stores, whitelisted keys;
+    files in `DATA_DIR` = exe userData / dev `apps/backend/.data`), `routes/ws.routes.ts` (`/ws`).
   - `server.ts` serves the built frontend statically when `SERVE_STATIC` is set (the Electron path).
 - `apps/frontend` — React 18 + Vite 5 + lightweight-charts v4, CSS Modules.
   - `hooks/useMarketStream.ts` — `/ws` client with auto-reconnect; tracks all active subscriptions
@@ -63,8 +65,14 @@ Four workspaces:
     symbol alone, or two panels showing the same symbol stomp/kill each other's stream.
   - `hooks/useHistoricalBars.ts` — legacy REST `GET /api/bars` hook; **no longer used by the chart**
     (the chart is snapshot-driven over WS) — the ~60s re-sync in `ChartPanel` calls `/api/bars` directly.
-  - `hooks/useSymbolDrawings.ts` + `lib/drawingStore.ts` — drawings are stored **per symbol**
-    (localStorage), shared across every panel/timeframe of that symbol (not per-panel).
+  - `hooks/useSymbolDrawings.ts` + `lib/drawingStore.ts` — drawings are stored **per symbol**,
+    shared across every panel/timeframe of that symbol (not per-panel). localStorage is only the
+    warm cache; the durable copy is a JSON file behind `PUT/GET /api/store/drawings` (hydrated at
+    boot with a per-id union merge, saved debounced) so drawings survive updates/cache clears.
+  - Price alerts (`type:'alert'` in the drawing store): **Alt+A** places one at the cursor price
+    on the focused chart; live tick/bar crossings quack (`lib/quack.ts`, WebAudio-synthesized —
+    no asset) and pop a bottom-right toast (`components/AlertToasts/`, mallard included). One-shot:
+    dragging or editing re-arms; `shouldFire` de-dupes multi-panel triggers.
   - `components/Chart/ChartContainer.tsx` — owns the lightweight-charts instance and exposes an
     **imperative `ChartHandle`** (`setData`, `updateBar`/`addBar`, `correctBars`, `setIndicators`,
     `setSessionLevels`, `setSessionRegions`, `fitContent`, `scrollToEnd`) via
