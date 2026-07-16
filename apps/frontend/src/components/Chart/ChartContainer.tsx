@@ -131,6 +131,8 @@ export interface ChartHandle {
   setSessionRegions: (regions: SessionRegion[]) => void;
   scrollToEnd: () => void;
   fitContent: () => void;
+  /** Price under the mouse cursor right now (null when off-chart). For Alt+A alerts. */
+  getCursorPrice: () => number | null;
 }
 
 interface Props {
@@ -148,12 +150,14 @@ interface Props {
   dataTimeRange?: DataTimeRange | null;
   onReady?: () => void;
   onDrawingComplete?: () => void;
+  /** Volume of the bar under the crosshair (null when off-chart). */
+  onHoverVolume?: (volume: number | null) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const ChartContainer = forwardRef<ChartHandle, Props>(
-  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete }, ref) => {
+  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete, onHoverVolume }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -168,6 +172,9 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     // any update for an older time (e.g. a late bar_close after a tick already
     // rolled the chart to the next minute).
     const lastTimeRef  = useRef(0);
+    const cursorPriceRef = useRef<number | null>(null); // price under the mouse (crosshair)
+    const onHoverVolumeRef = useRef(onHoverVolume);
+    useEffect(() => { onHoverVolumeRef.current = onHoverVolume; }, [onHoverVolume]);
     const [dims, setDims] = useState({ w: 0, h: 0 });
     // Id of the drawing currently being dragged (move/resize). Its committed copy
     // is hidden from the primitive while the overlay paints the live preview.
@@ -244,6 +251,17 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       const drawingsPrim = new DrawingsPrimitive();
       candle.attachPrimitive(drawingsPrim);
       drawingsPrimRef.current = drawingsPrim;
+
+      // Crosshair tracking: the price under the cursor (for Alt+A price alerts)
+      // and the hovered bar's volume (for the volume readout).
+      const onCross = (param: { point?: { x: number; y: number }; seriesData?: Map<unknown, unknown> }) => {
+        cursorPriceRef.current = param.point ? candle.coordinateToPrice(param.point.y) : null;
+        const vp = param.seriesData?.get(volume) as { value?: number } | undefined;
+        onHoverVolumeRef.current?.(
+          param.point && vp && typeof vp.value === 'number' ? vp.value : null
+        );
+      };
+      chart.subscribeCrosshairMove(onCross);
 
       onReady?.();
 
@@ -476,6 +494,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
 
     const fitContent  = useCallback(() => chartRef.current?.timeScale().fitContent(), []);
     const scrollToEnd = useCallback(() => chartRef.current?.timeScale().scrollToRealTime(), []);
+    const getCursorPrice = useCallback(() => cursorPriceRef.current, []);
 
     // Which indicator line (if any) passes within a few pixels of the point.
     // Walks each line's visible points and measures vertical distance to the
@@ -532,8 +551,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     }, [hitTestIndicators, hitTestSessionLevels, onIndicatorOpenSettings, onSessionLevelOpenSettings]);
 
     useImperativeHandle(ref, () => ({
-      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd,
-    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd]);
+      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd, getCursorPrice,
+    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd, getCursorPrice]);
 
     return (
       <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>

@@ -71,7 +71,17 @@ export interface PositionDrawing {
   target: number;
 }
 
-export type Drawing = TrendLineDrawing | HLineDrawing | RectangleDrawing | PositionDrawing;
+// Price alert: a full-width line at a price level. Created with Alt+A at the
+// cursor, draggable like an hline (dragging re-arms it). When the live price
+// crosses the level the app quacks and the alert flips to triggered (dim).
+export interface AlertDrawing {
+  id: string;
+  type: 'alert';
+  price: number;
+  triggeredAt?: number | null; // unix ms when it fired; null/absent = armed
+}
+
+export type Drawing = TrendLineDrawing | HLineDrawing | RectangleDrawing | PositionDrawing | AlertDrawing;
 
 // ─── Coordinate helpers ───────────────────────────────────────────────────────
 
@@ -224,7 +234,7 @@ export function hitTestDrawing(
   range: DataTimeRange | null = null,
   width = 0
 ): boolean {
-  if (drawing.type === 'hline') {
+  if (drawing.type === 'hline' || drawing.type === 'alert') {
     const y = series.priceToCoordinate(drawing.price);
     if (y === null) return false;
     return Math.abs(px.y - y) < HIT_RADIUS;
@@ -379,6 +389,8 @@ export function renderDrawings(
       renderRectangle(ctx, d, chart, series, isSelected, rightEdge, range);
     } else if (d.type === 'position') {
       renderPosition(ctx, d, chart, series, isSelected, rightEdge, range);
+    } else if (d.type === 'alert') {
+      renderAlert(ctx, d, series, rightEdge, isSelected);
     }
 
     ctx.restore();
@@ -498,6 +510,37 @@ function renderRectangle(
     drawHandle(ctx, a.x, a.y, d.borderColor);
     drawHandle(ctx, b.x, b.y, d.borderColor);
   }
+}
+
+const ALERT_ARMED = '#f59e0b';
+const ALERT_DONE  = '#787b86';
+
+function renderAlert(
+  ctx: CanvasRenderingContext2D,
+  d: AlertDrawing,
+  series: { priceToCoordinate: (p: number) => number | null },
+  width: number,
+  selected: boolean
+): void {
+  const y = series.priceToCoordinate(d.price);
+  if (y === null) return;
+  const armed = !d.triggeredAt;
+  const color = armed ? ALERT_ARMED : ALERT_DONE;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = selected ? 2 : 1;
+  ctx.setLineDash(armed ? [7, 4] : [2, 4]);
+  ctx.beginPath();
+  ctx.moveTo(0, y);
+  ctx.lineTo(width, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.font = '11px JetBrains Mono, monospace';
+  ctx.fillStyle = color;
+  ctx.fillText(`${armed ? '\u{1F514}' : '✓'} ${d.price.toFixed(2)}`, width - 92, y - 5);
+
+  if (selected) drawHandle(ctx, width / 2, y, color);
 }
 
 const POS_GREEN = '#089981';

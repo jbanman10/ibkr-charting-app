@@ -5,6 +5,8 @@ import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { DrawingToolType } from './DrawingCanvas';
 import { useSymbolDrawings } from '../../hooks/useSymbolDrawings';
 import { seedDrawings, getDrawings } from '../../lib/drawingStore';
+import { newDrawingId } from '../../lib/drawings';
+import { ensureAudio, playQuack, shouldFire } from '../../lib/quack';
 import { computeIndicators } from '../../lib/indicators';
 import { computeSessionLevels, computeSessionRegions } from '../../lib/sessions';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
@@ -135,6 +137,8 @@ export default function ChartPanel({
   const quoteRef = useRef({ bid: 0, ask: 0, last: 0 }); // running quote from sparse ticks
   const rafRef = useRef<number | null>(null);           // coalesce tick repaints to 1/frame
   const lastFeedRef = useRef(0); // last authoritative snapshot/bar_update/bar_close (ms)
+  const prevPriceRef = useRef<number | null>(null);     // previous live price, for alert crossing
+  const checkAlertsRef = useRef((_p: number) => {});    // assigned below (needs the drawings hook)
   const [showIndicators, setShowIndicators] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +152,8 @@ export default function ChartPanel({
   // clamp extent, OHLC display, drawing hit-testing). Updated on snapshot and
   // on each bar close (~once/min), not on every live update.
   const [bars, setBars] = useState<Bar[]>([]);
+  // Volume of the candle under the crosshair (null when not hovering a bar).
+  const [hoverVolume, setHoverVolume] = useState<number | null>(null);
 
   // Recompute session levels + pre/post shading from the current bar history.
   // Intraday-only; clears the overlays on daily/weekly or when toggled off.
@@ -206,6 +212,7 @@ export default function ChartPanel({
     gotSnapshotRef.current = false;
     barsRef.current = [];
     formingRef.current = null;
+    prevPriceRef.current = null;
     setBars([]);
     subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1, panel.id, panel.primaryExchange);
     const t = setTimeout(() => {
@@ -292,6 +299,7 @@ export default function ChartPanel({
     const price = q.last > 0 ? q.last : (q.bid > 0 && q.ask > 0 ? (q.bid + q.ask) / 2 : 0);
     const base = formingRef.current;
     if (price <= 0 || !base) return;
+    checkAlertsRef.current(price);
 
     // Clock-driven rollover: if the minute (bar boundary) has passed but IBKR's
     // keepUpToDate update hasn't arrived yet, open the next candle locally at the
@@ -354,6 +362,7 @@ export default function ChartPanel({
       lastFeedRef.current = Date.now();
       formingRef.current = { ...bar };
       chartRef.current?.updateBar(bar);
+      checkAlertsRef.current(Number(bar.close)); // backstop when ticks are sparse
       recomputeSessions();
     };
 
@@ -438,6 +447,55 @@ export default function ChartPanel({
   const handleDrawingsChange = useCallback((next: Drawing[]) => {
     setDrawings(next);
   }, [setDrawings]);
+
+  // ─── Price alerts ───────────────────────────────────────────────────────────
+  // Fire when the live price crosses an armed alert level: quack (duck, of
+  // course) and mark it triggered (line dims). shouldFire de-dupes when several
+  // panels show the same symbol.
+  useEffect(() => {
+    checkAlertsRef.current = (p: number) => {
+      const prev = prevPriceRef.current;
+      prevPriceRef.current = p;
+      if (prev == null || prev === p) return;
+      const all = getDrawings(panel.symbol);
+      let changed = false;
+      const next = all.map((d) => {
+        if (d.type !== 'alert' || d.triggeredAt) return d;
+        const crossed = (prev < d.price && p >= d.price) || (prev > d.price && p <= d.price);
+        if (!crossed) return d;
+        changed = true;
+        if (shouldFire(d.id)) {
+          playQuack(3);
+          window.dispatchEvent(new CustomEvent('ibkr:alert-toast', {
+            detail: { symbol: panel.symbol, price: d.price },
+          }));
+        }
+        return { ...d, triggeredAt: Date.now() };
+      });
+      if (changed) setDrawings(next);
+    };
+  }, [panel.symbol, setDrawings]);
+
+  // Alt+A drops an alert at the price under the cursor on the focused chart.
+  // The keydown is a user gesture, so it also unlocks the AudioContext for the
+  // quack that plays later when the alert actually fires.
+  useEffect(() => {
+    if (!isFocused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.key.toLowerCase() !== 'a' || e.ctrlKey || e.metaKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+      const price = chartRef.current?.getCursorPrice();
+      if (price == null || price <= 0) return;
+      e.preventDefault();
+      ensureAudio();
+      const alert: Drawing = { id: newDrawingId(), type: 'alert', price: Number(price.toFixed(2)), triggeredAt: null };
+      setDrawings([...getDrawings(panel.symbol), alert]);
+      setSelectedDrawingId(alert.id);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isFocused, panel.symbol, setDrawings]);
 
   const updateSelectedDrawing = useCallback((patch: Partial<Drawing>) => {
     if (!selectedDrawingId) return;
@@ -606,6 +664,16 @@ export default function ChartPanel({
 
   const displayData = bars.length > 0 ? bars[bars.length - 1] : null;
 
+  // Volume readout under the ⓘ chip: the hovered candle's volume, falling back
+  // to the newest bar when the cursor is off the chart.
+  const shownVolume = hoverVolume ?? (displayData ? Number(displayData.volume) : null);
+  const fmtVolume = (n: number) => {
+    if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+    return String(Math.round(n));
+  };
+
   // Alt+click anywhere on the panel maximizes it to fill the grid (alt+click
   // again restores) — like TradingView. Caught in the capture phase so it beats
   // the drawing canvas / chart click handlers and works even with a tool active.
@@ -693,6 +761,14 @@ export default function ChartPanel({
       <div className={styles.chartArea}>
         <div className={styles.ohlcvRow}>
           <PriceDisplay symbol={panel.symbol} data={displayData} />
+          {shownVolume != null && (
+            <div
+              className={`${styles.volChip} ${hoverVolume != null ? styles.volChipHover : ''}`}
+              title={hoverVolume != null ? 'Volume of the hovered candle' : 'Volume of the latest candle'}
+            >
+              Vol {fmtVolume(shownVolume)}
+            </div>
+          )}
         </div>
 
         {tfInput !== null && (
@@ -747,6 +823,7 @@ export default function ChartPanel({
           dataTimeRange={dataTimeRange}
           onReady={handleChartReady}
           onDrawingComplete={() => onToolChange('none')}
+          onHoverVolume={setHoverVolume}
         />
 
         {showDrawingSettings && selectedDrawing && (

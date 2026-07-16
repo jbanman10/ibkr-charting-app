@@ -80,6 +80,8 @@ function cursorForHandle(handle: ResizeHandle, type: Drawing['type']): string {
 /** Move an entire drawing by a logical (time/price) delta. */
 function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
   if (d.type === 'hline') return { ...d, price: d.price + dPrice };
+  // Dragging an alert to a new price re-arms it.
+  if (d.type === 'alert') return { ...d, price: d.price + dPrice, triggeredAt: null };
   if (d.type === 'position') {
     return {
       ...d,
@@ -237,7 +239,7 @@ export default function DrawingCanvas({
     const handle = hitResizeHandle(sel, px, chart, priceSeries, dataTimeRange, edge);
     if (handle) return { mode: 'resize', handle, cursor: cursorForHandle(handle, sel.type) };
     if (hitTestDrawing(sel, px, chart, priceSeries, dataTimeRange, width)) {
-      return { mode: 'move', cursor: sel.type === 'hline' ? 'ns-resize' : 'move' };
+      return { mode: 'move', cursor: sel.type === 'hline' || sel.type === 'alert' ? 'ns-resize' : 'move' };
     }
     return null;
   }, [chart, priceSeries, selectedId, dataTimeRange, width]);
