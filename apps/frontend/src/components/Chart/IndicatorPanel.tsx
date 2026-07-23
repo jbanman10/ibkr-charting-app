@@ -1,6 +1,7 @@
 import React from 'react';
 import type { IndicatorConfig } from '@ibkr-chart/types';
 import { indicatorColors, SESSION_COLORS } from '../../lib/chartTheme';
+import { indicatorKey } from '../../lib/indicators';
 import type { SessionOverlays } from '../../lib/layout';
 import styles from './IndicatorPanel.module.css';
 
@@ -18,7 +19,9 @@ const SESSION_TOGGLES: Array<{ key: keyof SessionOverlays; label: string; color:
   { key: 'shading',      label: 'Session shading',    color: SESSION_COLORS.premarket },
 ];
 
-const PRESETS: Array<{ type: 'SMA' | 'EMA'; period: number }> = [
+type Preset = { type: 'SMA' | 'EMA'; period: number; source?: 'daily' };
+
+const PRESETS: Preset[] = [
   { type: 'EMA', period: 9 },
   { type: 'EMA', period: 20 },
   { type: 'EMA', period: 50 },
@@ -27,34 +30,59 @@ const PRESETS: Array<{ type: 'SMA' | 'EMA'; period: number }> = [
   { type: 'SMA', period: 200 },
 ];
 
+// Daily-source MAs — computed on daily bars, projected onto any timeframe.
+const DAILY_PRESETS: Preset[] = [
+  { type: 'SMA', period: 5,   source: 'daily' },
+  { type: 'SMA', period: 20,  source: 'daily' },
+  { type: 'SMA', period: 200, source: 'daily' },
+];
+
 export default function IndicatorPanel({ indicators, onChange, sessionOverlays, onSessionOverlaysChange }: Props) {
-  const toggle = (type: 'SMA' | 'EMA', period: number) => {
-    const key = `${type}-${period}`;
-    const existing = indicators.find((i) => `${i.type}-${i.period}` === key);
+  const toggle = (p: Preset) => {
+    const key = indicatorKey(p);
+    const existing = indicators.find((i) => indicatorKey(i) === key);
 
     if (existing) {
-      // Toggle visibility
-      onChange(
-        indicators.map((i) =>
-          `${i.type}-${i.period}` === key ? { ...i, visible: !i.visible } : i
-        )
-      );
+      onChange(indicators.map((i) => (indicatorKey(i) === key ? { ...i, visible: !i.visible } : i)));
     } else {
-      // Add new
       onChange([
         ...indicators,
-        {
-          type,
-          period,
-          color: indicatorColors[key] ?? '#8a95a8',
-          visible: true,
-        },
+        { type: p.type, period: p.period, source: p.source, color: indicatorColors[key] ?? '#8a95a8', visible: true },
       ]);
     }
   };
 
-  const remove = (type: 'SMA' | 'EMA', period: number) => {
-    onChange(indicators.filter((i) => !(i.type === type && i.period === period)));
+  const remove = (p: Preset) => {
+    const key = indicatorKey(p);
+    onChange(indicators.filter((i) => indicatorKey(i) !== key));
+  };
+
+  const renderPreset = (p: Preset) => {
+    const key = indicatorKey(p);
+    const active = indicators.find((i) => indicatorKey(i) === key);
+    const isOn = active?.visible ?? false;
+    const color = active?.color ?? indicatorColors[key] ?? '#8a95a8';
+    return (
+      <button
+        key={key}
+        className={`${styles.presetBtn} ${isOn ? styles.active : ''}`}
+        style={{ '--ind-color': color } as React.CSSProperties}
+        onClick={() => toggle(p)}
+      >
+        <span className={styles.dot} />
+        <span className={styles.label}>{p.type} {p.period}</span>
+        {isOn && (
+          <span
+            className={styles.removeBtn}
+            role="button"
+            onClick={(e) => { e.stopPropagation(); remove(p); }}
+            title="Remove"
+          >
+            ×
+          </span>
+        )}
+      </button>
+    );
   };
 
   return (
@@ -63,33 +91,12 @@ export default function IndicatorPanel({ indicators, onChange, sessionOverlays, 
 
       <div className={styles.section}>
         <div className={styles.sectionLabel}>Moving averages</div>
-        {PRESETS.map(({ type, period }) => {
-          const key = `${type}-${period}`;
-          const active = indicators.find((i) => `${i.type}-${i.period}` === key);
-          const isOn = active?.visible ?? false;
-          const color = active?.color ?? indicatorColors[key] ?? '#8a95a8';
-          return (
-            <button
-              key={key}
-              className={`${styles.presetBtn} ${isOn ? styles.active : ''}`}
-              style={{ '--ind-color': color } as React.CSSProperties}
-              onClick={() => toggle(type, period)}
-            >
-              <span className={styles.dot} />
-              <span className={styles.label}>{type} {period}</span>
-              {isOn && (
-                <span
-                  className={styles.removeBtn}
-                  role="button"
-                  onClick={(e) => { e.stopPropagation(); remove(type, period); }}
-                  title="Remove"
-                >
-                  ×
-                </span>
-              )}
-            </button>
-          );
-        })}
+        {PRESETS.map(renderPreset)}
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>Daily MAs (on any timeframe)</div>
+        {DAILY_PRESETS.map(renderPreset)}
       </div>
 
       <div className={styles.section}>

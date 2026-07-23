@@ -3,7 +3,9 @@ import { z } from 'zod';
 import type { Timeframe, SecType, Quote } from '@ibkr-chart/types';
 import { TIMEFRAMES } from '@ibkr-chart/types';
 import { MarketDataService } from '../services/market-data.service.js';
+import { ExecutionsService } from '../services/executions.service.js';
 import { IBKRService } from '../services/ibkr.service.js';
+import { rvolFor } from '../lib/rvol.js';
 
 const timeframeValues = Object.keys(TIMEFRAMES) as [Timeframe, ...Timeframe[]];
 
@@ -102,6 +104,12 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // ─── Account executions (fills — entry/exit chart arrows) ──────────────────────
+  app.get('/api/executions', async () => {
+    const executions = await ExecutionsService.getInstance(ibkr, app.log as any).getExecutions();
+    return { executions };
+  });
+
   // ─── Watchlist quotes (batch) ──────────────────────────────────────────────────
   app.get('/api/quotes', async (request, reply) => {
     const parsed = QuotesQuerySchema.safeParse(request.query);
@@ -119,7 +127,11 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const quotes = [];
     for (const sym of symbols) {
       try {
-        quotes.push(await fetchQuote(marketData, sym));
+        const q = await fetchQuote(marketData, sym);
+        // Session-adjusted RVOL (works pre-market too). 10-day averages are
+        // day-cached, so this costs one extra request per symbol per day.
+        const rvol = await rvolFor(marketData, sym, q.volume, app.log as any);
+        quotes.push(rvol != null ? { ...q, rvol } : q);
       } catch (err) {
         quotes.push({ symbol: sym, error: err instanceof Error ? err.message : 'failed' });
       }

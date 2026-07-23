@@ -180,6 +180,14 @@ export interface LayoutConfig {
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
+// Daily (multi-timeframe) MAs shown on every panel by default: 5/20/200-day
+// levels projected onto whatever timeframe the panel is on.
+const DEFAULT_DAILY_MAS: IndicatorConfig[] = [
+  { type: 'SMA', period: 5,   color: '#38bdf8', visible: true, source: 'daily' },
+  { type: 'SMA', period: 20,  color: '#f59e0b', visible: true, source: 'daily' },
+  { type: 'SMA', period: 200, color: '#e5e7eb', visible: true, source: 'daily' },
+];
+
 export function defaultPanel(id: string, symbol = 'AAPL'): PanelConfig {
   return {
     id,
@@ -192,6 +200,7 @@ export function defaultPanel(id: string, symbol = 'AAPL'): PanelConfig {
     indicators: [
       { type: 'SMA', period: 20,  color: '#f0b429', visible: true },
       { type: 'EMA', period: 50,  color: '#60a5fa', visible: true },
+      ...DEFAULT_DAILY_MAS.map((m) => ({ ...m })),
     ],
     drawings: [],
     sessionOverlays: { ...DEFAULT_SESSION_OVERLAYS },
@@ -252,6 +261,11 @@ export function loadLayout(): LayoutConfig {
       if (next.secType === 'STK' && next.exchange && next.exchange !== 'SMART') {
         next.primaryExchange = next.exchange;
         next.exchange = 'SMART';
+      }
+      // Backfill the default daily (MTF) MAs onto panels saved before they
+      // existed, so they appear without a layout reset.
+      if (!(next.indicators ?? []).some((i) => i.source === 'daily')) {
+        next.indicators = [...(next.indicators ?? []), ...DEFAULT_DAILY_MAS.map((m) => ({ ...m }))];
       }
       return next;
     });

@@ -6,10 +6,12 @@ import { join } from 'node:path';
 import { config } from './config.js';
 import { IBKRService } from './services/ibkr.service.js';
 import { MarketDataService } from './services/market-data.service.js';
+import { ExecutionsService } from './services/executions.service.js';
 import { WebSocketGateway } from './services/ws.gateway.js';
 import { registerRoutes } from './routes/api.routes.js';
 import { registerSummaryRoutes } from './routes/summary.routes.js';
 import { registerStoreRoutes } from './routes/store.routes.js';
+import { registerScannerRoutes } from './routes/scanner.routes.js';
 import { registerWsRoute } from './routes/ws.routes.js';
 
 // ─── Logger setup — pino-pretty only if it's available, plain JSON otherwise ─
@@ -45,12 +47,15 @@ async function bootstrap(): Promise<void> {
   // ─── Services ────────────────────────────────────────────────────────────────
   const ibkr = IBKRService.getInstance(app.log as any);
   const marketData = MarketDataService.getInstance(ibkr, app.log as any);
-  WebSocketGateway.getInstance(ibkr, marketData, app.log as any);
+  const gateway = WebSocketGateway.getInstance(ibkr, marketData, app.log as any);
+  const executions = ExecutionsService.getInstance(ibkr, app.log as any);
+  executions.setOnNewExecutions((execs) => gateway.broadcastExecutions(execs));
 
   // ─── Routes ──────────────────────────────────────────────────────────────────
   await registerRoutes(app);
   await registerSummaryRoutes(app);
   await registerStoreRoutes(app);
+  await registerScannerRoutes(app);
   await registerWsRoute(app);
 
   // ─── Static frontend (Electron / production) ──────────────────────────────────

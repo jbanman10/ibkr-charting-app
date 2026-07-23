@@ -42,6 +42,24 @@ export interface ContractSearchResult {
   description: string;
 }
 
+// ─── Trade executions (fills) ────────────────────────────────────────────────
+
+// A normalized account fill from IBKR (reqExecutions), including manual TWS
+// orders. For options, `symbol` is the UNDERLYING ticker so fills can be
+// drawn as arrows on the underlying's chart.
+export interface TradeExecution {
+  execId: string;
+  time: number;              // unix seconds
+  symbol: string;            // underlying ticker
+  secType: string;           // 'OPT' | 'STK' | ...
+  side: 'BOT' | 'SLD';
+  price: number;             // fill price (option premium for OPT)
+  quantity: number;
+  strike?: number;           // options only
+  right?: string;            // 'C' | 'P' (options only)
+  expiry?: string;           // yyyymmdd (options only)
+}
+
 // ─── Timeframe ───────────────────────────────────────────────────────────────
 
 export type Timeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
@@ -73,6 +91,7 @@ export type WsMessageType =
   | 'tick'
   | 'bar_update'
   | 'bar_close'
+  | 'executions'
   | 'status'
   | 'error';
 
@@ -129,6 +148,11 @@ export interface WsBarCloseMsg {
   bar: Bar;
 }
 
+export interface WsExecutionsMsg {
+  type: 'executions';  // new account fills discovered by the backend poll
+  executions: TradeExecution[];
+}
+
 export interface WsStatusMsg {
   type: 'status';
   connected: boolean;
@@ -146,6 +170,7 @@ export type WsServerMsg =
   | WsTickMsg
   | WsBarUpdateMsg
   | WsBarCloseMsg
+  | WsExecutionsMsg
   | WsStatusMsg
   | WsErrorMsg;
 
@@ -170,6 +195,7 @@ export interface Quote {
   change: number;
   changePct: number;
   volume: number;
+  rvol?: number; // session-adjusted relative volume (vs normal pace for this time of day)
 }
 
 // Per-symbol result: either a Quote or an error (bad symbol, no data, etc.).
@@ -189,4 +215,8 @@ export interface IndicatorConfig {
   color: string;
   visible: boolean;
   lineWidth?: number; // 1–4, default 1
+  // 'daily' = computed on DAILY bars and projected onto the panel's timeframe
+  // (a 200-day MA shown as a stepped level on the 1m/30m). Absent = 'chart'
+  // (computed on the panel's own bars, the classic behavior).
+  source?: 'chart' | 'daily';
 }

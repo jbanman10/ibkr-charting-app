@@ -13,12 +13,14 @@ import {
 } from './lib/layout';
 import type { DrawingToolType } from './components/Chart/DrawingCanvas';
 import { useMarketStream } from './hooks/useMarketStream';
+import { addExecutions } from './lib/executionStore';
 import ChartPanel from './components/Chart/ChartPanel';
 import ResizableGrid from './components/Grid/ResizableGrid';
 import LayoutPicker from './components/Grid/LayoutPicker';
 import StatusBar from './components/StatusBar';
 import MarketSummary from './components/MarketSummary/MarketSummary';
 import WatchlistPanel from './components/Watchlist/WatchlistPanel';
+import RvolScanner from './components/Scanner/RvolScanner';
 import SideRail, { type RailItem } from './components/SideRail/SideRail';
 import MallardIcon from './components/MallardIcon';
 import AlertToasts from './components/AlertToasts/AlertToasts';
@@ -34,6 +36,9 @@ export default function App() {
   const [activeTool, setActiveTool] = useState<DrawingToolType>('none');
   const [showSummary, setShowSummary] = useState(false);
   const [showWatchlist, setShowWatchlist] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  // Trade-execution arrows on charts, toggled from the rail; persisted.
+  const [showTrades, setShowTrades] = useState(() => localStorage.getItem('ibkr_show_trades') !== '0');
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
   const layoutRef = useRef(layout);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
@@ -84,6 +89,7 @@ export default function App() {
     onBarUpdate: useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barUpdateHandler', sym, bar, tf), [routeBar]),
     onBarClose:  useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barCloseHandler',  sym, bar, tf), [routeBar]),
     onTick:      useCallback((tick: Tick) => routeTick(tick), [routeTick]),
+    onExecutions: addExecutions, // store notifies subscribed panels directly
   });
 
   // ─── Layout switching ──────────────────────────────────────────────────────
@@ -150,15 +156,45 @@ export default function App() {
   const maximizedIndex = maxIdx >= 0 ? maxIdx : null;
 
   // Right-edge tool rail — extend this list as more quick tools land.
+  // Watchlist and scanner share the single drawer slot (opening one closes the other).
   const railItems: RailItem[] = [
     {
       id: 'watchlist',
       title: showWatchlist ? 'Hide watchlist' : 'Show watchlist',
       active: showWatchlist,
-      onClick: () => setShowWatchlist((v) => !v),
+      onClick: () => { setShowScanner(false); setShowWatchlist((v) => !v); },
       icon: (
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+      ),
+    },
+    {
+      id: 'scanner',
+      title: showScanner ? 'Hide RVOL scanner' : 'RVOL scanner (mid/large caps)',
+      active: showScanner,
+      onClick: () => { setShowWatchlist(false); setShowScanner((v) => !v); },
+      icon: (
+        // radar/pulse icon
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M1.5 9.5h3l2-5 3 8 2-6 1.5 3h1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      id: 'trades',
+      title: showTrades ? 'Hide trade arrows' : 'Show trade arrows',
+      active: showTrades,
+      onClick: () => setShowTrades((v) => {
+        const next = !v;
+        try { localStorage.setItem('ibkr_show_trades', next ? '1' : '0'); } catch { /* quota */ }
+        return next;
+      }),
+      icon: (
+        // paired entry/exit arrows
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M5 13V5M5 5L2.8 7.2M5 5l2.2 2.2" stroke="#089981" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M11 3v8m0 0 2.2-2.2M11 11 8.8 8.8" stroke="#f23645" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       ),
     },
@@ -259,6 +295,7 @@ export default function App() {
                 onFocus={() => setFocusedPanelId(panel.id)}
                 isMaximized={maximizedPanelId === panel.id}
                 onToggleMaximize={() => toggleMaximize(panel.id)}
+                showTrades={showTrades}
               />
             ))}
           </ResizableGrid>
@@ -270,6 +307,15 @@ export default function App() {
             focusedSymbol={focusedPanel?.symbol}
             onSelect={handleWatchlistSelect}
             onClose={() => setShowWatchlist(false)}
+          />
+        )}
+
+        {showScanner && (
+          <RvolScanner
+            ibkrConnected={ibkrConnected}
+            focusedSymbol={focusedPanel?.symbol}
+            onSelect={handleWatchlistSelect}
+            onClose={() => setShowScanner(false)}
           />
         )}
 

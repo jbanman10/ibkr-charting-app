@@ -17,6 +17,7 @@ import type {
   Bar,
   Tick,
   Timeframe,
+  TradeExecution,
 } from '@ibkr-chart/types';
 import { IBKRService } from './ibkr.service.js';
 import { MarketDataService } from './market-data.service.js';
@@ -60,6 +61,12 @@ export class WebSocketGateway {
       WebSocketGateway.instance = new WebSocketGateway(ibkr, marketData, logger);
     }
     return WebSocketGateway.instance;
+  }
+
+  /** Push newly discovered account fills to every connected client. */
+  broadcastExecutions(executions: TradeExecution[]): void {
+    if (!executions.length) return;
+    this.broadcast({ type: 'executions', executions });
   }
 
   // ─── Called by Fastify route handler ───────────────────────────────────────

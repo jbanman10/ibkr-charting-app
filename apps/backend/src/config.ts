@@ -23,5 +23,7 @@ export const config = {
     historicalBase: 1000,
     streamBase: 2000,
     searchBase: 3000,
+    execBase: 4000,
+    scanBase: 5000,
   },
 } as const;

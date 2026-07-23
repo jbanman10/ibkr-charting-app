@@ -6,6 +6,7 @@ import type {
   Tick,
   Timeframe,
   SecType,
+  TradeExecution,
 } from '@ibkr-chart/types';
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? `ws://${window.location.host}/ws`;
@@ -19,6 +20,7 @@ export interface UseMarketStreamOptions {
   onBarUpdate?: (symbol: string, bar: Bar, timeframe: Timeframe) => void;
   onBarClose?: (symbol: string, bar: Bar, timeframe: Timeframe) => void;
   onTick?: (tick: Tick) => void;
+  onExecutions?: (executions: TradeExecution[]) => void;
   onStatusChange?: (status: StreamStatus) => void;
 }
 
@@ -103,6 +105,9 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
           break;
         case 'bar_close':
           o.onBarClose?.(msg.symbol, msg.bar, msg.timeframe);
+          break;
+        case 'executions':
+          o.onExecutions?.(msg.executions);
           break;
         case 'status':
           setIbkrConnected(msg.connected);
