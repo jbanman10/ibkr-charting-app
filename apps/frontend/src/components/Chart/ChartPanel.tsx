@@ -8,6 +8,9 @@ import { seedDrawings, getDrawings } from '../../lib/drawingStore';
 import { newDrawingId, unixToDayString } from '../../lib/drawings';
 import { ensureAudio, playQuack, shouldFire } from '../../lib/quack';
 import { getExecutions, subscribeExecutions } from '../../lib/executionStore';
+import { getEarnings, subscribeEarnings } from '../../lib/earningsStore';
+import type { EarningsMark, EarningsMarkDetail } from '../../lib/earningsPrimitive';
+import type { EarningsInfo } from '@ibkr-chart/types';
 import type { SeriesMarker, Time } from 'lightweight-charts';
 import { computeIndicators, computeDailyIndicators, indicatorKey } from '../../lib/indicators';
 import { computeSessionLevels, computeSessionRegions } from '../../lib/sessions';
@@ -138,6 +141,7 @@ export default function ChartPanel({
   const chartReadyRef = useRef(false);
   const formingRef = useRef<Bar | null>(null);  // current live (forming) bar
   const dailyBarsRef = useRef<Bar[]>([]);       // daily bars for daily-source (MTF) MAs
+  const chartAreaRef = useRef<HTMLDivElement>(null); // for clamping the earnings popover
   const gotSnapshotRef = useRef(false);         // has the initial snapshot arrived for this sub?
   const quoteRef = useRef({ bid: 0, ask: 0, last: 0 }); // running quote from sparse ticks
   const rafRef = useRef<number | null>(null);           // coalesce tick repaints to 1/frame
@@ -159,6 +163,12 @@ export default function ChartPanel({
   const [bars, setBars] = useState<Bar[]>([]);
   // Volume of the candle under the crosshair (null when not hovering a bar).
   const [hoverVolume, setHoverVolume] = useState<number | null>(null);
+  // Earnings: next report date + last 4 quarters (bubbles on the daily chart).
+  const [earnings, setEarnings] = useState<EarningsInfo | null>(null);
+  // Detail popover for a clicked earnings badge (null = closed).
+  const [erPopover, setErPopover] = useState<
+    { detail: EarningsMarkDetail; kind: EarningsMark['kind']; x: number } | null
+  >(null);
 
   // Recompute session levels + pre/post shading from the current bar history.
   // Intraday-only; clears the overlays on daily/weekly or when toggled off.
@@ -502,37 +512,90 @@ export default function ChartPanel({
     const handle = chartRef.current;
     if (!handle) return;
     const seriesBars = barsRef.current;
-    if (!showTrades || !seriesBars.length) { handle.setMarkers([]); return; }
+    if (!seriesBars.length) { handle.setMarkers([]); return; }
     const daily = panel.timeframe === '1d' || panel.timeframe === '1w';
     const firstTime = Number(seriesBars[0].time);
     const forming = formingRef.current;
     const markers: SeriesMarker<Time>[] = [];
 
-    for (const e of getExecutions(panel.symbol)) {
-      if (e.time < firstTime) continue; // older than loaded history
-      let barTime: number | null = null;
+    // Nearest loaded bar at or before `t` (markers only render on real bars).
+    const snapToBar = (t: number): number | null => {
+      if (t < firstTime) return null;
       for (let i = seriesBars.length - 1; i >= 0; i--) {
-        if (Number(seriesBars[i].time) <= e.time) { barTime = Number(seriesBars[i].time); break; }
+        if (Number(seriesBars[i].time) <= t) return Number(seriesBars[i].time);
       }
-      if (barTime == null) continue;
-      if (forming && e.time >= Number(forming.time)) barTime = Number(forming.time);
+      return null;
+    };
 
-      const isBuy = e.side === 'BOT';
-      const price = e.price.toFixed(2);
-      const text = e.strike != null
-        ? `${e.quantity}× ${e.strike}${e.right ?? ''} @${price}`
-        : `${e.quantity} @${price}`;
-      markers.push({
-        time: (daily ? unixToDayString(barTime) : barTime) as Time,
-        position: isBuy ? 'belowBar' : 'aboveBar',
-        shape: isBuy ? 'arrowUp' : 'arrowDown',
-        color: isBuy ? '#089981' : '#f23645',
-        text,
-        size: 1,
+    if (showTrades) {
+      for (const e of getExecutions(panel.symbol)) {
+        let barTime = snapToBar(e.time);
+        if (barTime == null) continue;
+        if (forming && e.time >= Number(forming.time)) barTime = Number(forming.time);
+
+        const isBuy = e.side === 'BOT';
+        const price = e.price.toFixed(2);
+        const text = e.strike != null
+          ? `${e.quantity}× ${e.strike}${e.right ?? ''} @${price}`
+          : `${e.quantity} @${price}`;
+        markers.push({
+          time: (daily ? unixToDayString(barTime) : barTime) as Time,
+          position: isBuy ? 'belowBar' : 'aboveBar',
+          shape: isBuy ? 'arrowUp' : 'arrowDown',
+          color: isBuy ? '#089981' : '#f23645',
+          text,
+          size: 1,
+        });
+      }
+    }
+
+    handle.setMarkers(markers);
+
+    // Earnings badges pinned to the bottom of the pane (daily/weekly only — on
+    // intraday the report dates fall outside the loaded history). Past reports
+    // sit on their bar; the upcoming one is projected past the last bar by the
+    // number of TRADING days away, so it lands in the future whitespace.
+    if (!daily || !earnings) { handle.setEarningsMarks([]); return; }
+    const dayLabel = (unix: number) => new Date(unix * 1000).toLocaleDateString('en-US', {
+      timeZone: 'UTC', month: 'short', day: 'numeric', year: 'numeric',
+    });
+    const marks: EarningsMark[] = [];
+    for (const e of earnings.history) {
+      const barTime = snapToBar(e.date);
+      if (barTime == null) continue;
+      marks.push({
+        time: unixToDayString(barTime) as Time,
+        kind: (e.surprisePct ?? 0) >= 0 ? 'beat' : 'miss',
+        detail: {
+          dateLabel: dayLabel(e.date),
+          fiscalQtr: e.fiscalQtr,
+          eps: e.eps,
+          consensus: e.consensus,
+          surprisePct: e.surprisePct,
+        },
       });
     }
-    handle.setMarkers(markers);
-  }, [panel.symbol, panel.timeframe, showTrades]);
+    const nx = earnings.next;
+    if (nx) {
+      const lastBar = Number(seriesBars[seriesBars.length - 1].time);
+      if (nx.date > lastBar) {
+        // Calendar days → trading days (the daily scale advances one index per
+        // session), so the badge lands on roughly the right future session.
+        const calDays = Math.round((nx.date - lastBar) / 86_400);
+        const barsAhead = Math.max(1, Math.round(calDays * (5 / 7)));
+        marks.push({
+          kind: 'upcoming', barsAhead, estimated: nx.estimated,
+          detail: {
+            dateLabel: dayLabel(nx.date),
+            consensus: nx.consensusEps,
+            timing: nx.timing,
+            estimated: nx.estimated,
+          },
+        });
+      }
+    }
+    handle.setEarningsMarks(marks);
+  }, [panel.symbol, panel.timeframe, showTrades, earnings]);
 
   // Refresh arrows when bars change (snapshot / bar close / timeframe) and when
   // new fills arrive for this symbol.
@@ -540,6 +603,24 @@ export default function ChartPanel({
     rebuildMarkers();
     return subscribeExecutions((sym) => { if (sym === panel.symbol) rebuildMarkers(); });
   }, [bars, rebuildMarkers, panel.symbol]);
+
+  // Earnings (next date + last 4 quarters) for this symbol — cached per symbol.
+  useEffect(() => {
+    setEarnings(getEarnings(panel.symbol));
+    return subscribeEarnings((sym) => {
+      if (sym === panel.symbol) setEarnings(getEarnings(panel.symbol));
+    });
+  }, [panel.symbol]);
+
+  // The earnings popover belongs to one badge on one chart — drop it when the
+  // chart changes underneath it, and on Escape.
+  useEffect(() => { setErPopover(null); }, [panel.symbol, panel.timeframe]);
+  useEffect(() => {
+    if (!erPopover) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setErPopover(null); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [erPopover]);
 
   // ─── Price alerts ───────────────────────────────────────────────────────────
   // Fire when the live price crosses an armed alert level: quack (duck, of
@@ -757,6 +838,24 @@ export default function ChartPanel({
 
   const displayData = bars.length > 0 ? bars[bars.length - 1] : null;
 
+  // Next-earnings chip: days out, highlighted when it's inside a week (holding
+  // options through a print is a decision you want to make deliberately).
+  const nextEarnings = useMemo(() => {
+    const n = earnings?.next;
+    if (!n) return null;
+    const days = Math.round((n.date * 1000 - Date.now()) / 86_400_000);
+    if (days < -1) return null; // stale upstream date, already reported
+    const label = new Date(n.date * 1000).toLocaleDateString('en-US', {
+      timeZone: 'UTC', month: 'short', day: 'numeric',
+    });
+    const when = days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days}d`;
+    return {
+      label: n.estimated ? `~${label}` : label, // ~ = projected, not yet confirmed
+      when, soon: days <= 7, timing: n.timing, consensusEps: n.consensusEps,
+      estimated: n.estimated,
+    };
+  }, [earnings]);
+
   // Volume readout under the ⓘ chip: the hovered candle's volume, falling back
   // to the newest bar when the cursor is off the chart.
   const shownVolume = hoverVolume ?? (displayData ? Number(displayData.volume) : null);
@@ -851,7 +950,7 @@ export default function ChartPanel({
       </div>
 
       {/* ── Chart area ────────────────────────────────────────────────── */}
-      <div className={styles.chartArea}>
+      <div className={styles.chartArea} ref={chartAreaRef}>
         <div className={styles.ohlcvRow}>
           <PriceDisplay symbol={panel.symbol} data={displayData} />
           {shownVolume != null && (
@@ -860,6 +959,18 @@ export default function ChartPanel({
               title={hoverVolume != null ? 'Volume of the hovered candle' : 'Volume of the latest candle'}
             >
               Vol {fmtVolume(shownVolume)}
+            </div>
+          )}
+          {nextEarnings && (
+            <div
+              className={`${styles.erChip} ${nextEarnings.soon ? styles.erChipSoon : ''}`}
+              title={`${nextEarnings.estimated ? 'Projected' : 'Confirmed'} next earnings: ${nextEarnings.label}${
+                nextEarnings.timing ? ` (${nextEarnings.timing})` : ''
+              }${nextEarnings.consensusEps != null ? ` · consensus EPS $${nextEarnings.consensusEps}` : ''}${
+                nextEarnings.estimated ? ' — projected from reporting cadence, updates when announced' : ''
+              }`}
+            >
+              ER {nextEarnings.label} · {nextEarnings.when}
             </div>
           )}
         </div>
@@ -917,7 +1028,70 @@ export default function ChartPanel({
           onReady={handleChartReady}
           onDrawingComplete={() => onToolChange('none')}
           onHoverVolume={setHoverVolume}
+          onEarningsClick={(detail, kind, x) => setErPopover({ detail, kind, x })}
         />
+
+        {erPopover && (
+          <div
+            className={styles.erPopover}
+            style={{ left: Math.max(8, Math.min(erPopover.x - 90, Math.max(8, (chartAreaRef.current?.clientWidth ?? 400) - 196))) }}
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <div className={styles.erPopHeader}>
+              <span className={styles.erPopTitle}>
+                {erPopover.kind === 'upcoming'
+                  ? (erPopover.detail.estimated ? 'Next earnings (projected)' : 'Next earnings')
+                  : erPopover.detail.fiscalQtr || 'Reported'}
+              </span>
+              <button className={styles.erPopClose} onClick={() => setErPopover(null)} title="Close">
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div className={styles.erPopDate}>
+              {erPopover.detail.dateLabel}
+              {erPopover.detail.timing ? ` · ${erPopover.detail.timing}` : ''}
+            </div>
+            {erPopover.kind === 'upcoming' ? (
+              <>
+                {erPopover.detail.consensus != null && (
+                  <div className={styles.erPopRow}>
+                    <span className={styles.erPopKey}>Consensus EPS</span>
+                    <span className={styles.erPopVal}>${erPopover.detail.consensus.toFixed(2)}</span>
+                  </div>
+                )}
+                {erPopover.detail.estimated && (
+                  <div className={styles.erPopNote}>Projected from reporting cadence — updates when announced.</div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className={styles.erPopRow}>
+                  <span className={styles.erPopKey}>Reported EPS</span>
+                  <span className={styles.erPopVal}>
+                    {erPopover.detail.eps != null ? `$${erPopover.detail.eps.toFixed(2)}` : '—'}
+                  </span>
+                </div>
+                <div className={styles.erPopRow}>
+                  <span className={styles.erPopKey}>Consensus</span>
+                  <span className={styles.erPopVal}>
+                    {erPopover.detail.consensus != null ? `$${erPopover.detail.consensus.toFixed(2)}` : '—'}
+                  </span>
+                </div>
+                <div className={styles.erPopRow}>
+                  <span className={styles.erPopKey}>Surprise</span>
+                  <span className={`${styles.erPopVal} ${erPopover.kind === 'beat' ? styles.erUp : styles.erDown}`}>
+                    {erPopover.detail.surprisePct != null
+                      ? `${erPopover.detail.surprisePct >= 0 ? '+' : ''}${erPopover.detail.surprisePct.toFixed(2)}%`
+                      : '—'}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {showDrawingSettings && selectedDrawing && (
           <DrawingSettings

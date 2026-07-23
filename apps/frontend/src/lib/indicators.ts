@@ -76,6 +76,10 @@ export type IndicatorSeries = {
   data: LineData[];
   color?: string;
   lineWidth?: number;
+  // Keep this line out of the price scale's auto-range. Daily MAs projected
+  // onto an intraday chart sit far from the intraday range (a 200-day MA can be
+  // 15% below price) and would otherwise zoom the candles into a sliver.
+  noAutoscale?: boolean;
 };
 
 export function computeIndicators(
@@ -177,6 +181,8 @@ export function computeDailyIndicators(
       if (carried == null) continue; // before the MA has enough history
       data.push({ time: toChartTime(b.time, isDaily), value: carried });
     }
-    return { key: indicatorKey(cfg), data, color: cfg.color, lineWidth: cfg.lineWidth };
+    // On intraday charts the daily level sits far from the visible range, so it
+    // must not drive the price scale (on a daily chart it's a normal MA).
+    return { key: indicatorKey(cfg), data, color: cfg.color, lineWidth: cfg.lineWidth, noAutoscale: !isDaily };
   });
 }

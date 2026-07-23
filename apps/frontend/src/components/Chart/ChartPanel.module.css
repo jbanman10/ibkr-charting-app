@@ -193,3 +193,106 @@
   overflow-y: auto;
   overflow-x: hidden;
 }
+
+/* Next-earnings chip, under the volume readout. */
+.erChip {
+  padding: 2px 8px;
+  border-radius: 5px;
+  background: rgba(19, 23, 34, 0.72);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Within a week — worth noticing before sizing a position. */
+.erChipSoon {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+/* ─── Earnings badge detail popover (click an "E" badge) ─────────────────── */
+
+.erPopover {
+  position: absolute;
+  bottom: 30px;               /* just above the badge row */
+  width: 188px;
+  padding: 9px 11px 10px;
+  border: 1px solid var(--border-muted);
+  border-radius: 8px;
+  background: rgba(19, 23, 34, 0.96);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  z-index: 32;
+}
+
+.erPopHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+}
+
+.erPopTitle {
+  flex: 1;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.erPopClose {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.erPopClose:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
+.erPopDate {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  margin-bottom: 7px;
+}
+
+.erPopRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.erPopKey {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.erPopVal {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.erPopNote {
+  margin-top: 6px;
+  font-family: var(--font-ui);
+  font-size: 9px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.erUp   { color: #0bd9a2; }
+.erDown { color: #f97066; }

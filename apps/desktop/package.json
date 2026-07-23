@@ -1,6 +1,6 @@
 {
   "name": "@ibkr-chart/desktop",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "private": true,
   "description": "Standalone Electron shell for ibkr-chart",
   "author": "ibkr-chart",
