@@ -205,6 +205,30 @@ export interface QuotesResponse {
   quotes: QuoteResult[];
 }
 
+// ─── Earnings ────────────────────────────────────────────────────────────────
+
+/** A reported quarter: when it was announced and how it landed vs consensus. */
+export interface EarningsEvent {
+  date: number;             // unix seconds (UTC midnight of the report date)
+  fiscalQtr: string;        // e.g. "Mar 2026"
+  eps: number | null;       // reported EPS
+  consensus: number | null; // consensus forecast
+  surprisePct: number | null;
+}
+
+export interface EarningsInfo {
+  symbol: string;
+  next: {
+    date: number;           // unix seconds (UTC midnight)
+    timing: string | null;  // 'after market close' | 'before market open' | null
+    consensusEps: number | null;
+    // true = projected from the reporting cadence because the vendor hasn't
+    // published a date yet; flips to false once the real date is announced.
+    estimated: boolean;
+  } | null;
+  history: EarningsEvent[]; // most recent first
+}
+
 // ─── Indicator types ─────────────────────────────────────────────────────────
 
 export type IndicatorType = 'SMA' | 'EMA';

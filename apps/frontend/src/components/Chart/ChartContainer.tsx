@@ -26,6 +26,7 @@ import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { SessionRegion } from '../../lib/sessions';
 import { SessionShadingPrimitive } from '../../lib/sessionShadingPrimitive';
 import { DrawingsPrimitive } from '../../lib/drawingsPrimitive';
+import { EarningsPrimitive, type EarningsMark, type EarningsMarkDetail } from '../../lib/earningsPrimitive';
 import { etTickMarkFormatter, etCrosshairFormatter } from '../../lib/chartTime';
 import { indicatorColors } from '../../lib/chartTheme';
 import DrawingCanvas, { type DrawingToolType } from './DrawingCanvas';
@@ -132,6 +133,8 @@ export interface ChartHandle {
   setSessionRegions: (regions: SessionRegion[]) => void;
   /** Trade-execution arrows (entry/exit fills). Times must be chart times. */
   setMarkers: (markers: SeriesMarker<Time>[]) => void;
+  /** Earnings badges pinned to the bottom of the pane (daily/weekly). */
+  setEarningsMarks: (marks: EarningsMark[]) => void;
   scrollToEnd: () => void;
   fitContent: () => void;
   /** Price under the mouse cursor right now (null when off-chart). For Alt+A alerts. */
@@ -155,12 +158,14 @@ interface Props {
   onDrawingComplete?: () => void;
   /** Volume of the bar under the crosshair (null when off-chart). */
   onHoverVolume?: (volume: number | null) => void;
+  /** An earnings badge was clicked — show its detail popover. */
+  onEarningsClick?: (detail: EarningsMarkDetail, kind: EarningsMark['kind'], x: number) => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const ChartContainer = forwardRef<ChartHandle, Props>(
-  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete, onHoverVolume }, ref) => {
+  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete, onHoverVolume, onEarningsClick }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -169,6 +174,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const priceLinesRef = useRef<Map<string, IPriceLine>>(new Map());
     const shadingRef    = useRef<SessionShadingPrimitive | null>(null);
     const drawingsPrimRef = useRef<DrawingsPrimitive | null>(null);
+    const earningsPrimRef = useRef<EarningsPrimitive | null>(null);
+    const barCountRef = useRef(0); // newest bar's logical index = barCount - 1
     const tfRef        = useRef(timeframe);
     // Newest bar time (unix seconds) currently on the chart. lightweight-charts'
     // update() can only touch the last point or append a newer one — so we drop
@@ -177,6 +184,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const lastTimeRef  = useRef(0);
     const cursorPriceRef = useRef<number | null>(null); // price under the mouse (crosshair)
     const markersRef = useRef<SeriesMarker<Time>[]>([]); // execution arrows (re-applied after full repaints)
+    const earningsMarksRef = useRef<EarningsMark[]>([]); // earnings badges (need the current bar count)
     const onHoverVolumeRef = useRef(onHoverVolume);
     useEffect(() => { onHoverVolumeRef.current = onHoverVolume; }, [onHoverVolume]);
     const [dims, setDims] = useState({ w: 0, h: 0 });
@@ -256,6 +264,11 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       candle.attachPrimitive(drawingsPrim);
       drawingsPrimRef.current = drawingsPrim;
 
+      // Earnings badges along the bottom of the pane.
+      const earningsPrim = new EarningsPrimitive();
+      candle.attachPrimitive(earningsPrim);
+      earningsPrimRef.current = earningsPrim;
+
       // Crosshair tracking: the price under the cursor (for Alt+A price alerts)
       // and the hovered bar's volume (for the volume readout).
       const onCross = (param: { point?: { x: number; y: number }; seriesData?: Map<unknown, unknown> }) => {
@@ -296,8 +309,29 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         priceLinesRef.current.clear();
         shadingRef.current = null;
         drawingsPrimRef.current = null;
+        earningsPrimRef.current = null;
       };
     }, []); // mount once
+
+    // Clicking an earnings badge opens its detail popover. Registered here (not
+    // in DrawingCanvas) because the badges live in this chart's primitive; the
+    // drawing-selection click handler is unaffected by a hit down here.
+    const onEarningsClickRef = useRef(onEarningsClick);
+    useEffect(() => { onEarningsClickRef.current = onEarningsClick; }, [onEarningsClick]);
+    useEffect(() => {
+      const chart = chartRef.current;
+      if (!chart) return;
+      const onClick = (param: { point?: { x: number; y: number } }) => {
+        const pt = param.point;
+        // While a drawing tool is active a click is placing a shape, not
+        // inspecting an earnings badge.
+        if (!pt || activeToolRef.current !== 'none') return;
+        const hit = earningsPrimRef.current?.hitTest(pt);
+        if (hit?.detail) onEarningsClickRef.current?.(hit.detail, hit.kind, pt.x);
+      };
+      chart.subscribeClick(onClick);
+      return () => chart.unsubscribeClick(onClick);
+    }, [dims.w, dims.h]); // re-bind once the chart exists / resizes
 
     // Keep the drawings primitive in sync with React state (frame-synced render).
     useEffect(() => {
@@ -357,6 +391,15 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       }
     }, []);
 
+    // Earnings badges: the upcoming one is positioned relative to the newest
+    // bar's logical index, so re-apply whenever the bar count changes too.
+    const applyEarningsMarks = useCallback(() => {
+      earningsPrimRef.current?.setMarks(
+        earningsMarksRef.current,
+        barCountRef.current > 0 ? barCountRef.current - 1 : null
+      );
+    }, []);
+
     const setData = useCallback((bars: Bar[]) => {
       const candle = candleRef.current;
       const volume = volumeRef.current;
@@ -380,11 +423,13 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
           chart.timeScale().fitContent();
         }
         applyMarkers();
+        barCountRef.current = built.cd.length;
+        applyEarningsMarks();
         console.log('[ChartContainer] Rendered', built.cd.length, 'bars');
       } catch (err) {
         console.error('[ChartContainer] setData error:', err);
       }
-    }, [buildSeries, applyMarkers]);
+    }, [buildSeries, applyMarkers, applyEarningsMarks]);
 
     // Re-render the whole series while PRESERVING the current viewport. Needed to
     // correct a bar that is no longer the chart's last point (the library's
@@ -406,10 +451,12 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         if (vr) chart.timeScale().setVisibleLogicalRange(vr);
         lastTimeRef.current = built.lastTime;
         applyMarkers();
+        barCountRef.current = built.cd.length;
+        applyEarningsMarks();
       } catch (err) {
         console.error('[ChartContainer] correctBars error:', err);
       }
-    }, [buildSeries, applyMarkers]);
+    }, [buildSeries, applyMarkers, applyEarningsMarks]);
 
     const updateBar = useCallback((bar: Bar) => {
       if (!isValidChartTime(bar.time)) return;
@@ -448,13 +495,16 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         if (!incoming.has(key)) { chart.removeSeries(line); existing.delete(key); }
       }
 
-      for (const { key, data, color, lineWidth } of series) {
+      for (const { key, data, color, lineWidth, noAutoscale } of series) {
         const opts = {
           color: color ?? indicatorColors[key] ?? '#8a95a8',
           lineWidth: Math.min(4, Math.max(1, lineWidth ?? 1)) as 1 | 2 | 3 | 4,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
+          // Returning null keeps the series out of the price scale's auto-range
+          // (daily MAs on an intraday chart) while still drawing it.
+          autoscaleInfoProvider: noAutoscale ? () => null : undefined,
         };
         const line = existing.get(key);
         if (!line) existing.set(key, chart.addLineSeries(opts));
@@ -522,6 +572,11 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       applyMarkers();
     }, [applyMarkers]);
 
+    const setEarningsMarks = useCallback((marks: EarningsMark[]) => {
+      earningsMarksRef.current = marks;
+      applyEarningsMarks();
+    }, [applyEarningsMarks]);
+
     // Which indicator line (if any) passes within a few pixels of the point.
     // Walks each line's visible points and measures vertical distance to the
     // segment spanning the click's x — cheap enough for a double-click.
@@ -577,8 +632,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     }, [hitTestIndicators, hitTestSessionLevels, onIndicatorOpenSettings, onSessionLevelOpenSettings]);
 
     useImperativeHandle(ref, () => ({
-      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, fitContent, scrollToEnd, getCursorPrice,
-    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, fitContent, scrollToEnd, getCursorPrice]);
+      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, setEarningsMarks, fitContent, scrollToEnd, getCursorPrice,
+    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, setEarningsMarks, fitContent, scrollToEnd, getCursorPrice]);
 
     return (
       <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
