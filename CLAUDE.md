@@ -50,12 +50,19 @@ Four workspaces:
     partitioned by range in `config.ts` (`reqId.historicalBase` 1000 / `streamBase` 2000 /
     `searchBase` 3000); the per-stream tick channel uses `reqId + 1_000_000`.
   - `services/ws.gateway.ts` — per-browser-client WebSocket session/subscription management.
+  - `services/executions.service.ts` — polls `reqExecutions` every 10s (manual TWS fills don't
+    push to non-zero client ids); normalizes fills to `TradeExecution` (options carry the
+    UNDERLYING symbol), persists ~5 days to `<DATA_DIR>/store/executions.json`, broadcasts new
+    ones over WS (`executions` message) and serves `GET /api/executions`.
   - Routes: `routes/api.routes.ts` (`/api/status`, `/api/bars`, `/api/search`, `/api/quotes` —
     batch watchlist quotes: last/change/%/today-volume from 2-day 1-min bars, per-symbol errors
     inline), `routes/summary.routes.ts` (`/api/summary` — SPY/QQQ quotes via IBKR + ForexFactory
     econ calendar + CNBC RSS, each independently cached), `routes/store.routes.ts`
     (`GET/PUT /api/store/:key` — file-backed persistence for client stores, whitelisted keys;
-    files in `DATA_DIR` = exe userData / dev `apps/backend/.data`), `routes/ws.routes.ts` (`/ws`).
+    files in `DATA_DIR` = exe userData / dev `apps/backend/.data`), `routes/scanner.routes.ts`
+    (`/api/scanner/rvol` — IBKR HOT_BY_VOLUME scan over STK.US.MAJOR, `marketCapAbove` is in
+    **$ millions**, then exact session-adjusted RVOL from `fetchRecentDailyBars` — today's partial
+    daily bar carries cumulative volume; results cached 60s), `routes/ws.routes.ts` (`/ws`).
   - `server.ts` serves the built frontend statically when `SERVE_STATIC` is set (the Electron path).
 - `apps/frontend` — React 18 + Vite 5 + lightweight-charts v4, CSS Modules.
   - `hooks/useMarketStream.ts` — `/ws` client with auto-reconnect; tracks all active subscriptions
@@ -69,6 +76,10 @@ Four workspaces:
     shared across every panel/timeframe of that symbol (not per-panel). localStorage is only the
     warm cache; the durable copy is a JSON file behind `PUT/GET /api/store/drawings` (hydrated at
     boot with a per-id union merge, saved debounced) so drawings survive updates/cache clears.
+  - Trade execution arrows: `lib/executionStore.ts` (fills keyed by underlying, hydrated from
+    `/api/executions` + WS pushes) → `rebuildMarkers` in `ChartPanel` (snap fill time to the
+    nearest bar ≤ it) → `ChartHandle.setMarkers` (native lightweight-charts series markers,
+    re-applied after every full `setData`/`correctBars`). Buys green ↑ below bar, sells red ↓ above.
   - Price alerts (`type:'alert'` in the drawing store): **Alt+A** places one at the cursor price
     on the focused chart; live tick/bar crossings quack (`lib/quack.ts`, WebAudio-synthesized —
     no asset) and pop a bottom-right toast (`components/AlertToasts/`, mallard included). One-shot:
@@ -100,7 +111,9 @@ Four workspaces:
     splitters; per-window layout is keyed `ibkr_chart_layout_v3:win<id>` (from a `?win=` param).
   - `components/MarketSummary/` — the "morning summary" popup (SPY/QQQ, econ calendar, news).
   - `components/SideRail/` — persistent right-edge tool rail (icon buttons via a `RailItem[]`);
-    extend the `railItems` array in `App.tsx` as more quick tools land. First tool: the watchlist.
+    extend the `railItems` array in `App.tsx` as more quick tools land. Tools: watchlist,
+    RVOL scanner (`components/Scanner/`, shares the drawer slot with the watchlist — opening one
+    closes the other), and the trade-arrows toggle (persisted as `ibkr_show_trades`).
   - `components/Watchlist/` + `hooks/useWatchlist.ts` + `lib/watchlistStore.ts` — a single global
     watchlist (localStorage `ibkr_watchlist_v1`) docked left of the rail; polls `/api/quotes` every
     30s while open. Clicking a row loads that symbol (STK/SMART/USD) into the **focused** panel.

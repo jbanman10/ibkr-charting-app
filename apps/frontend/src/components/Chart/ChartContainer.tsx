@@ -14,6 +14,7 @@ import type {
   CandlestickData,
   LineData,
   HistogramData,
+  SeriesMarker,
   Time,
   DeepPartial,
   ChartOptions,
@@ -129,6 +130,8 @@ export interface ChartHandle {
   setIndicators: (series: IndicatorSeries[]) => void;
   setSessionLevels: (lines: SessionLevelLine[]) => void;
   setSessionRegions: (regions: SessionRegion[]) => void;
+  /** Trade-execution arrows (entry/exit fills). Times must be chart times. */
+  setMarkers: (markers: SeriesMarker<Time>[]) => void;
   scrollToEnd: () => void;
   fitContent: () => void;
   /** Price under the mouse cursor right now (null when off-chart). For Alt+A alerts. */
@@ -173,6 +176,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     // rolled the chart to the next minute).
     const lastTimeRef  = useRef(0);
     const cursorPriceRef = useRef<number | null>(null); // price under the mouse (crosshair)
+    const markersRef = useRef<SeriesMarker<Time>[]>([]); // execution arrows (re-applied after full repaints)
     const onHoverVolumeRef = useRef(onHoverVolume);
     useEffect(() => { onHoverVolumeRef.current = onHoverVolume; }, [onHoverVolume]);
     const [dims, setDims] = useState({ w: 0, h: 0 });
@@ -338,6 +342,21 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       return { cd, vd, lastTime: Number(ordered[ordered.length - 1].time) };
     }, []);
 
+    // Execution arrows. Stored in a ref and re-applied after any full setData
+    // (snapshot/correctBars) because the library keeps markers per data-set.
+    const applyMarkers = useCallback(() => {
+      const candle = candleRef.current;
+      if (!candle) return;
+      const sorted = [...markersRef.current].sort((a, b) => {
+        const ta = typeof a.time === 'string' ? Date.parse(a.time as string) / 1000 : Number(a.time);
+        const tb = typeof b.time === 'string' ? Date.parse(b.time as string) / 1000 : Number(b.time);
+        return ta - tb;
+      });
+      try { candle.setMarkers(sorted); } catch (err) {
+        console.error('[ChartContainer] setMarkers error:', err);
+      }
+    }, []);
+
     const setData = useCallback((bars: Bar[]) => {
       const candle = candleRef.current;
       const volume = volumeRef.current;
@@ -360,11 +379,12 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         } else {
           chart.timeScale().fitContent();
         }
+        applyMarkers();
         console.log('[ChartContainer] Rendered', built.cd.length, 'bars');
       } catch (err) {
         console.error('[ChartContainer] setData error:', err);
       }
-    }, [buildSeries]);
+    }, [buildSeries, applyMarkers]);
 
     // Re-render the whole series while PRESERVING the current viewport. Needed to
     // correct a bar that is no longer the chart's last point (the library's
@@ -385,10 +405,11 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         volume.setData(built.vd);
         if (vr) chart.timeScale().setVisibleLogicalRange(vr);
         lastTimeRef.current = built.lastTime;
+        applyMarkers();
       } catch (err) {
         console.error('[ChartContainer] correctBars error:', err);
       }
-    }, [buildSeries]);
+    }, [buildSeries, applyMarkers]);
 
     const updateBar = useCallback((bar: Bar) => {
       if (!isValidChartTime(bar.time)) return;
@@ -496,6 +517,11 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const scrollToEnd = useCallback(() => chartRef.current?.timeScale().scrollToRealTime(), []);
     const getCursorPrice = useCallback(() => cursorPriceRef.current, []);
 
+    const setMarkers = useCallback((markers: SeriesMarker<Time>[]) => {
+      markersRef.current = markers;
+      applyMarkers();
+    }, [applyMarkers]);
+
     // Which indicator line (if any) passes within a few pixels of the point.
     // Walks each line's visible points and measures vertical distance to the
     // segment spanning the click's x — cheap enough for a double-click.
@@ -551,8 +577,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     }, [hitTestIndicators, hitTestSessionLevels, onIndicatorOpenSettings, onSessionLevelOpenSettings]);
 
     useImperativeHandle(ref, () => ({
-      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd, getCursorPrice,
-    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, fitContent, scrollToEnd, getCursorPrice]);
+      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, fitContent, scrollToEnd, getCursorPrice,
+    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, fitContent, scrollToEnd, getCursorPrice]);
 
     return (
       <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>

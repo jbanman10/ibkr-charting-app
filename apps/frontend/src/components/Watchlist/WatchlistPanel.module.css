@@ -205,3 +205,20 @@
 
 .row:hover .removeBtn { display: flex; }
 .removeBtn:hover { color: var(--candle-down); background: var(--bg-base); }
+
+/* ─── RVOL badge (same heat thresholds as the scanner) ───────────────────── */
+
+.rvol {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.rvolHot  { color: #0bd9a2; background: rgba(8,153,129,0.18); border-color: rgba(8,153,129,0.35); }
+.rvolWarm { color: #f0b429; background: rgba(240,180,41,0.14); border-color: rgba(240,180,41,0.3); }
+.rvolCool { color: var(--text-secondary); background: var(--bg-elevated); border-color: var(--border-subtle); }

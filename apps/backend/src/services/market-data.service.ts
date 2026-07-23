@@ -121,6 +121,17 @@ export class MarketDataService {
     return result;
   }
 
+  /** A few daily bars (incl. today's PARTIAL bar with cumulative volume) —
+   * used by the RVOL scanner. Queued on the pacing chain like all one-shots. */
+  fetchRecentDailyBars(contract: IBContract, days: number): Promise<Bar[]> {
+    const result = this.histChain.then(() =>
+      this.runHistoricalRequest(contract, '1 day', `${Math.max(2, days)} D`, 1)
+    );
+    const advance = () => this.delay(HIST_SPACING_MS);
+    this.histChain = result.then(advance, advance);
+    return result;
+  }
+
   private delay(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
   }

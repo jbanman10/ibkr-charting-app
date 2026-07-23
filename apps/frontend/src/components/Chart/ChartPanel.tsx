@@ -5,9 +5,11 @@ import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { DrawingToolType } from './DrawingCanvas';
 import { useSymbolDrawings } from '../../hooks/useSymbolDrawings';
 import { seedDrawings, getDrawings } from '../../lib/drawingStore';
-import { newDrawingId } from '../../lib/drawings';
+import { newDrawingId, unixToDayString } from '../../lib/drawings';
 import { ensureAudio, playQuack, shouldFire } from '../../lib/quack';
-import { computeIndicators } from '../../lib/indicators';
+import { getExecutions, subscribeExecutions } from '../../lib/executionStore';
+import type { SeriesMarker, Time } from 'lightweight-charts';
+import { computeIndicators, computeDailyIndicators, indicatorKey } from '../../lib/indicators';
 import { computeSessionLevels, computeSessionRegions } from '../../lib/sessions';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
 import type { SessionOverlays, SessionLevelStyle } from '../../lib/layout';
@@ -112,6 +114,7 @@ interface Props {
   onFocus: () => void;
   isMaximized: boolean;
   onToggleMaximize: () => void;
+  showTrades: boolean;
 }
 
 export default function ChartPanel({
@@ -128,11 +131,13 @@ export default function ChartPanel({
   onFocus,
   isMaximized,
   onToggleMaximize,
+  showTrades,
 }: Props) {
   const chartRef = useRef<ChartHandle>(null);
   const barsRef = useRef<Bar[]>([]);            // closed bars — authoritative, straight from IBKR
   const chartReadyRef = useRef(false);
   const formingRef = useRef<Bar | null>(null);  // current live (forming) bar
+  const dailyBarsRef = useRef<Bar[]>([]);       // daily bars for daily-source (MTF) MAs
   const gotSnapshotRef = useRef(false);         // has the initial snapshot arrived for this sub?
   const quoteRef = useRef({ bid: 0, ask: 0, last: 0 }); // running quote from sparse ticks
   const rafRef = useRef<number | null>(null);           // coalesce tick repaints to 1/frame
@@ -177,14 +182,32 @@ export default function ChartPanel({
     handle.setSessionRegions(ov.shading ? computeSessionRegions(bars) : []);
   }, [panel.timeframe, panel.sessionOverlays, panel.sessionLevelStyles]);
 
+  // Compute + apply BOTH chart-source and daily-source (MTF) MAs in one pass —
+  // setIndicators replaces the whole set, so they must be sent together.
+  const applyIndicators = useCallback(() => {
+    const handle = chartRef.current;
+    if (!handle || !barsRef.current.length) return;
+    const active = panel.indicators.filter((i) => i.visible);
+    const chartCfgs = active.filter((i) => (i.source ?? 'chart') === 'chart');
+    const dailyCfgs = active.filter((i) => i.source === 'daily');
+    // Live price drives today's daily close so the projected level reacts.
+    const livePrice = formingRef.current?.close
+      ?? (barsRef.current.length ? Number(barsRef.current[barsRef.current.length - 1].close) : null);
+    handle.setIndicators([
+      ...computeIndicators(barsRef.current, chartCfgs, panel.timeframe),
+      ...(dailyCfgs.length && dailyBarsRef.current.length
+        ? computeDailyIndicators(barsRef.current, dailyBarsRef.current, dailyCfgs, panel.timeframe, livePrice)
+        : []),
+    ]);
+  }, [panel.indicators, panel.timeframe]);
+
   const renderSnapshot = useCallback((snap: Bar[]) => {
     if (!chartRef.current || !snap.length) return;
     chartRef.current.setData(snap);
     formingRef.current = { ...snap[snap.length - 1] };
-    const active = panel.indicators.filter((i) => i.visible);
-    if (active.length) chartRef.current.setIndicators(computeIndicators(snap, active, panel.timeframe));
+    applyIndicators();
     recomputeSessions();
-  }, [panel.indicators, panel.timeframe, recomputeSessions]);
+  }, [applyIndicators, recomputeSessions]);
 
   // Re-apply overlays when toggles or timeframe change (bars already loaded).
   useEffect(() => { recomputeSessions(); }, [recomputeSessions]);
@@ -197,10 +220,33 @@ export default function ChartPanel({
 
   // Recompute indicators when config changes.
   useEffect(() => {
-    if (!chartRef.current || !barsRef.current.length) return;
-    const active = panel.indicators.filter((i) => i.visible);
-    chartRef.current.setIndicators(computeIndicators(barsRef.current, active, panel.timeframe));
-  }, [panel.indicators, panel.timeframe]);
+    applyIndicators();
+  }, [applyIndicators]);
+
+  // Daily bars for daily-source (MTF) MAs — one fetch per symbol, refreshed
+  // occasionally (today's bar + a new session after midnight). Independent of
+  // the panel's own timeframe so a 1m panel can show the 200-DAY MA.
+  useEffect(() => {
+    if (!panel.symbol || !ibkrConnected) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const params = new URLSearchParams({
+          symbol: panel.symbol, secType: panel.secType, exchange: panel.exchange,
+          currency: panel.currency, timeframe: '1d', useRTH: '1',
+        });
+        if (panel.primaryExchange) params.set('primaryExchange', panel.primaryExchange);
+        const res = await fetch(`/api/bars?${params}`);
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as { bars?: Bar[] };
+        dailyBarsRef.current = body.bars ?? [];
+        applyIndicators();
+      } catch { /* transient — next cycle retries */ }
+    };
+    void load();
+    const t = setInterval(load, 5 * 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, ibkrConnected, applyIndicators]);
 
   // ─── Live subscription (keepUpToDate: snapshot + updates) ──────────────────
 
@@ -213,6 +259,7 @@ export default function ChartPanel({
     barsRef.current = [];
     formingRef.current = null;
     prevPriceRef.current = null;
+    dailyBarsRef.current = []; // the daily-bars effect refetches for the new symbol
     setBars([]);
     subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1, panel.id, panel.primaryExchange);
     const t = setTimeout(() => {
@@ -263,8 +310,7 @@ export default function ChartPanel({
           ? [...official, forming]
           : official;
         chartRef.current?.correctBars(series);
-        const active = panel.indicators.filter((i) => i.visible);
-        if (active.length) chartRef.current?.setIndicators(computeIndicators(official, active, panel.timeframe));
+        applyIndicators();
         setBars(official);
         recomputeSessions();
       } catch { /* transient — next cycle retries */ }
@@ -273,7 +319,7 @@ export default function ChartPanel({
     const onVisible = () => { if (document.visibilityState === 'visible') void resync(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { ctrl.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
-  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, panel.indicators, recomputeSessions]);
+  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, applyIndicators, recomputeSessions]);
 
   // ─── Stream handlers (snapshot / bar_update / bar_close) ───────────────────
   //
@@ -391,12 +437,11 @@ export default function ChartPanel({
         formingRef.current = { ...bar };
         chartRef.current?.updateBar(bar);
       }
-      const active = panel.indicators.filter((i) => i.visible);
-      if (active.length) chartRef.current?.setIndicators(computeIndicators(bars, active, panel.timeframe));
+      applyIndicators();
       setBars([...bars]); // reactive mirror for drawing extent / OHLC display
       recomputeSessions();
     };
-  }, [panel.symbol, panel.indicators, panel.timeframe, recomputeSessions, renderSnapshot]);
+  }, [panel.symbol, panel.timeframe, applyIndicators, recomputeSessions, renderSnapshot]);
 
   useEffect(() => {
     const el = document.getElementById(`chart-panel-${panel.id}`);
@@ -447,6 +492,54 @@ export default function ChartPanel({
   const handleDrawingsChange = useCallback((next: Drawing[]) => {
     setDrawings(next);
   }, [setDrawings]);
+
+  // ─── Trade execution arrows ─────────────────────────────────────────────────
+  // Account fills (incl. manual TWS option orders, mapped to the underlying)
+  // render as arrows: buys green below the bar, sells red above. Fill times are
+  // snapped to the nearest bar at or before the fill.
+
+  const rebuildMarkers = useCallback(() => {
+    const handle = chartRef.current;
+    if (!handle) return;
+    const seriesBars = barsRef.current;
+    if (!showTrades || !seriesBars.length) { handle.setMarkers([]); return; }
+    const daily = panel.timeframe === '1d' || panel.timeframe === '1w';
+    const firstTime = Number(seriesBars[0].time);
+    const forming = formingRef.current;
+    const markers: SeriesMarker<Time>[] = [];
+
+    for (const e of getExecutions(panel.symbol)) {
+      if (e.time < firstTime) continue; // older than loaded history
+      let barTime: number | null = null;
+      for (let i = seriesBars.length - 1; i >= 0; i--) {
+        if (Number(seriesBars[i].time) <= e.time) { barTime = Number(seriesBars[i].time); break; }
+      }
+      if (barTime == null) continue;
+      if (forming && e.time >= Number(forming.time)) barTime = Number(forming.time);
+
+      const isBuy = e.side === 'BOT';
+      const price = e.price.toFixed(2);
+      const text = e.strike != null
+        ? `${e.quantity}× ${e.strike}${e.right ?? ''} @${price}`
+        : `${e.quantity} @${price}`;
+      markers.push({
+        time: (daily ? unixToDayString(barTime) : barTime) as Time,
+        position: isBuy ? 'belowBar' : 'aboveBar',
+        shape: isBuy ? 'arrowUp' : 'arrowDown',
+        color: isBuy ? '#089981' : '#f23645',
+        text,
+        size: 1,
+      });
+    }
+    handle.setMarkers(markers);
+  }, [panel.symbol, panel.timeframe, showTrades]);
+
+  // Refresh arrows when bars change (snapshot / bar close / timeframe) and when
+  // new fills arrive for this symbol.
+  useEffect(() => {
+    rebuildMarkers();
+    return subscribeExecutions((sym) => { if (sym === panel.symbol) rebuildMarkers(); });
+  }, [bars, rebuildMarkers, panel.symbol]);
 
   // ─── Price alerts ───────────────────────────────────────────────────────────
   // Fire when the live price crosses an armed alert level: quack (duck, of
@@ -522,18 +615,18 @@ export default function ChartPanel({
 
   const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId) ?? null;
 
-  // Indicator settings card, opened by double-clicking an MA line. Keyed by
-  // "TYPE-period" (the same key the chart series use).
+  // Indicator settings card, opened by double-clicking an MA line. Keyed by the
+  // same `indicatorKey` the chart series use (daily MAs get a `-D` suffix).
   const [indicatorSettingsKey, setIndicatorSettingsKey] = useState<string | null>(null);
   const settingsIndicator = indicatorSettingsKey
-    ? panel.indicators.find((i) => `${i.type}-${i.period}` === indicatorSettingsKey) ?? null
+    ? panel.indicators.find((i) => indicatorKey(i) === indicatorSettingsKey) ?? null
     : null;
 
   const updateSettingsIndicator = useCallback((patch: Partial<IndicatorConfig>) => {
     if (!indicatorSettingsKey) return;
     onPanelChange({
       indicators: panel.indicators.map((i) =>
-        `${i.type}-${i.period}` === indicatorSettingsKey ? { ...i, ...patch } : i
+        indicatorKey(i) === indicatorSettingsKey ? { ...i, ...patch } : i
       ),
     });
   }, [indicatorSettingsKey, panel.indicators, onPanelChange]);
@@ -541,7 +634,7 @@ export default function ChartPanel({
   const removeSettingsIndicator = useCallback(() => {
     if (!indicatorSettingsKey) return;
     onPanelChange({
-      indicators: panel.indicators.filter((i) => `${i.type}-${i.period}` !== indicatorSettingsKey),
+      indicators: panel.indicators.filter((i) => indicatorKey(i) !== indicatorSettingsKey),
     });
     setIndicatorSettingsKey(null);
   }, [indicatorSettingsKey, panel.indicators, onPanelChange]);

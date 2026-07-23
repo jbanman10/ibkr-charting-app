@@ -81,6 +81,13 @@ export const indicatorColors: Record<string, string> = {
   'EMA-20': '#34d399',
   'EMA-50': '#60a5fa',
   'EMA-200':'#f472b6',
+  // Daily (multi-timeframe) MAs — distinct hues so they read as key levels.
+  'SMA-5-D':   '#38bdf8',
+  'SMA-20-D':  '#f59e0b',
+  'SMA-200-D': '#e5e7eb',
+  'EMA-5-D':   '#38bdf8',
+  'EMA-20-D':  '#f59e0b',
+  'EMA-200-D': '#e5e7eb',
 };
 
 export function getIndicatorLineOptions(key: string): DeepPartial<LineSeriesOptions> {

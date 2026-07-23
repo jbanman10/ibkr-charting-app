@@ -29,7 +29,9 @@ export default function IndicatorSettings({ indicator, onChange, onRemove, onClo
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div className={styles.header}>
-        <span className={styles.title}>{indicator.type} {indicator.period}</span>
+        <span className={styles.title}>
+          {indicator.type} {indicator.period}{indicator.source === 'daily' ? ' · Daily' : ''}
+        </span>
         <button className={styles.closeBtn} onClick={onClose} title="Close (Esc)">
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
             <path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>

@@ -26,6 +26,13 @@ function fmtVol(n: number): string {
 const hasQuote = (q: QuoteResult | undefined): q is Extract<QuoteResult, { last: number }> =>
   !!q && 'last' in q;
 
+/** Heat color for the RVOL badge (same thresholds as the scanner). */
+function rvolClass(rvol: number): string {
+  if (rvol >= 3) return styles.rvolHot;
+  if (rvol >= 1.5) return styles.rvolWarm;
+  return styles.rvolCool;
+}
+
 export default function WatchlistPanel({ ibkrConnected, focusedSymbol, onSelect, onClose }: Props) {
   const { symbols, quotes, loading, add, remove } = useWatchlist(true, ibkrConnected);
   const [draft, setDraft] = useState('');
@@ -82,6 +89,14 @@ export default function WatchlistPanel({ ibkrConnected, focusedSymbol, onSelect,
                 <span className={styles.symbol}>{sym}</span>
                 <span className={styles.volume}>Vol {quote ? fmtVol(quote.volume) : '—'}</span>
               </div>
+              {quote?.rvol != null && (
+                <span
+                  className={`${styles.rvol} ${rvolClass(quote.rvol)}`}
+                  title="Relative volume vs normal pace for this time of day"
+                >
+                  {quote.rvol.toFixed(1)}×
+                </span>
+              )}
               <div className={styles.rowStats}>
                 <span className={styles.price}>{quote ? fmtPrice(quote.last) : (q ? 'n/a' : '—')}</span>
                 <span className={`${styles.pct} ${quote ? (up ? styles.up : styles.down) : ''}`}>
