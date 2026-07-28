@@ -165,6 +165,20 @@ export default function DrawingSettings({ drawing, onChange, onDelete, onClose }
         </button>
       </div>
 
+      {/* Label — free text drawn on the chart at the drawing's right edge */}
+      <div className={styles.row}>
+        <span className={styles.label}>Label</span>
+        <input
+          className={styles.textInput}
+          type="text"
+          value={(drawing as { label?: string }).label ?? ''}
+          placeholder="none"
+          maxLength={40}
+          spellCheck={false}
+          onChange={(e) => onChange({ label: e.target.value } as Partial<Drawing>)}
+        />
+      </div>
+
       {/* Color */}
       <div className={styles.row}>
         <span className={styles.label}>Color</span>

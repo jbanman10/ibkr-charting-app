@@ -13,6 +13,7 @@ import { registerSummaryRoutes } from './routes/summary.routes.js';
 import { registerStoreRoutes } from './routes/store.routes.js';
 import { registerScannerRoutes } from './routes/scanner.routes.js';
 import { registerEarningsRoutes } from './routes/earnings.routes.js';
+import { registerPnlRoutes } from './routes/pnl.routes.js';
 import { registerWsRoute } from './routes/ws.routes.js';
 
 // ─── Logger setup — pino-pretty only if it's available, plain JSON otherwise ─
@@ -58,6 +59,7 @@ async function bootstrap(): Promise<void> {
   await registerStoreRoutes(app);
   await registerScannerRoutes(app);
   await registerEarningsRoutes(app);
+  await registerPnlRoutes(app);
   await registerWsRoute(app);
 
   // ─── Static frontend (Electron / production) ──────────────────────────────────

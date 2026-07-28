@@ -58,6 +58,39 @@ export interface TradeExecution {
   strike?: number;           // options only
   right?: string;            // 'C' | 'P' (options only)
   expiry?: string;           // yyyymmdd (options only)
+  // Filled in from IBKR's commissionReport (arrives just after the fill).
+  // realizedPnl is only present on CLOSING fills.
+  commission?: number;       // absolute cost of this fill
+  realizedPnl?: number;      // IBKR's own FIFO realized P&L, gross of commission
+}
+
+// ─── P&L calendar ────────────────────────────────────────────────────────────
+
+/** One trading day's realized performance, net of commissions. */
+export interface DailyPnl {
+  date: string;      // 'YYYY-MM-DD' (exchange/trade date)
+  pnl: number;       // realized P&L net of commissions
+  trades: number;    // round-trips (grouped per symbol per day)
+  wins: number;      // round-trips that closed positive
+  commissions: number;
+  // Sum of winning / losing round-trips, so month stats (avg win, avg loss,
+  // profit factor) are exact instead of inferred from the daily net.
+  grossWin: number;  // ≥ 0
+  grossLoss: number; // ≤ 0
+  source: 'flex' | 'local';
+}
+
+export interface PnlCalendarResponse {
+  days: DailyPnl[];
+  /** Last successful Flex sync (unix ms), null if never. */
+  syncedAt: number | null;
+  /** False until a Flex token + query id are saved. */
+  flexConfigured: boolean;
+}
+
+export interface FlexConfig {
+  token?: string;
+  queryId?: string;
 }
 
 // ─── Timeframe ───────────────────────────────────────────────────────────────

@@ -184,3 +184,21 @@
   font-weight: 600;
   color: var(--text-primary);
 }
+
+/* Free-text label for a drawing (rendered as a chip on the chart). */
+.textInput {
+  width: 118px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--border-muted);
+  border-radius: 5px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+
+.textInput:focus { border-color: var(--accent); }
+.textInput::placeholder { color: var(--text-secondary); }
