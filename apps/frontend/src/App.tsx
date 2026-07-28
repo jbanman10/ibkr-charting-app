@@ -21,6 +21,7 @@ import StatusBar from './components/StatusBar';
 import MarketSummary from './components/MarketSummary/MarketSummary';
 import WatchlistPanel from './components/Watchlist/WatchlistPanel';
 import RvolScanner from './components/Scanner/RvolScanner';
+import PnlCalendar from './components/PnlCalendar/PnlCalendar';
 import SideRail, { type RailItem } from './components/SideRail/SideRail';
 import MallardIcon from './components/MallardIcon';
 import AlertToasts from './components/AlertToasts/AlertToasts';
@@ -37,6 +38,7 @@ export default function App() {
   const [showSummary, setShowSummary] = useState(false);
   const [showWatchlist, setShowWatchlist] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const [showPnl, setShowPnl] = useState(false);
   // Trade-execution arrows on charts, toggled from the rail; persisted.
   const [showTrades, setShowTrades] = useState(() => localStorage.getItem('ibkr_show_trades') !== '0');
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
@@ -178,6 +180,20 @@ export default function App() {
         // radar/pulse icon
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <path d="M1.5 9.5h3l2-5 3 8 2-6 1.5 3h1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      id: 'pnl',
+      title: 'P&L calendar',
+      active: showPnl,
+      onClick: () => setShowPnl((v) => !v),
+      icon: (
+        // calendar with a trend tick
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <rect x="2" y="3.2" width="12" height="10.6" rx="1.6" stroke="currentColor" strokeWidth="1.3"/>
+          <path d="M2 6.4h12M5.4 2v2.4M10.6 2v2.4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+          <path d="M4.9 11.4l2-2.2 1.6 1.5 2.6-2.8" stroke="#0bd9a2" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       ),
     },
@@ -325,6 +341,9 @@ export default function App() {
 
       {/* ── Morning summary popup ───────────────────────────────────── */}
       {showSummary && <MarketSummary onClose={() => setShowSummary(false)} />}
+
+      {/* ── P&L calendar window ─────────────────────────────────────── */}
+      {showPnl && <PnlCalendar onClose={() => setShowPnl(false)} />}
 
       {/* ── Triggered-alert notifications (bottom right) ────────────── */}
       <AlertToasts />

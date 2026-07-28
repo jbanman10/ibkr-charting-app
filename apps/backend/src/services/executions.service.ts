@@ -12,7 +12,7 @@
  * the WS gateway for broadcast.
  */
 
-import { EventName, ExecutionFilter, Contract as IBContract, Execution } from '@stoqey/ib';
+import { EventName, ExecutionFilter, Contract as IBContract, Execution, CommissionReport } from '@stoqey/ib';
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Logger } from 'pino';
@@ -21,7 +21,12 @@ import { IBKRService } from './ibkr.service.js';
 import { config } from '../config.js';
 
 const POLL_MS = 10_000;
-const KEEP_DAYS = 5;
+// Fills feed both the chart arrows (recent) and the P&L calendar's CURRENT day
+// (Flex covers history), but keeping a long local tail costs nothing and gives
+// the calendar a fallback for days Flex hasn't published yet.
+const KEEP_DAYS = 400;
+// IBKR sends Double.MAX_VALUE for "no realized P&L" (opening trades).
+const NO_VALUE = 1e12;
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), '.data');
 const FILE = join(DATA_DIR, 'store', 'executions.json');
 
@@ -33,6 +38,8 @@ export class ExecutionsService {
   private reqId = config.reqId.execBase;
   private cache = new Map<string, TradeExecution>(); // execId → fill
   private pending: TradeExecution[] = [];            // fills gathered during one poll
+  // execId → commission/realized P&L, for reports that beat their fill here.
+  private commissions = new Map<string, { commission: number; realizedPnl?: number }>();
   private pollTimer: NodeJS.Timeout | null = null;
   private loaded: Promise<void>;
   private onNewExecutions: (execs: TradeExecution[]) => void = () => {};
@@ -90,13 +97,41 @@ export class ExecutionsService {
       void this.ingest(this.pending);
       this.pending = [];
     });
+
+    // Commission reports arrive alongside/just after their fill and carry
+    // IBKR's own FIFO realized P&L — the basis for the P&L calendar. They can
+    // land before OR after the fill is cached, so keep them in a side map and
+    // apply from both directions.
+    this.ibkr.api.on(EventName.commissionReport, (cr: CommissionReport) => {
+      const execId = cr.execId;
+      if (!execId) return;
+      const commission = Math.abs(Number(cr.commission ?? 0));
+      const rp = Number(cr.realizedPNL);
+      const realizedPnl = Number.isFinite(rp) && Math.abs(rp) < NO_VALUE ? rp : undefined;
+      this.commissions.set(execId, { commission, realizedPnl });
+
+      const existing = this.cache.get(execId);
+      if (existing) {
+        existing.commission = commission;
+        if (realizedPnl !== undefined) existing.realizedPnl = realizedPnl;
+        void this.saveToDisk();
+      }
+    });
   }
 
   private async ingest(execs: TradeExecution[]): Promise<void> {
     await this.loaded;
     const fresh = execs.filter((e) => !this.cache.has(e.execId));
     if (!fresh.length) return;
-    for (const e of fresh) this.cache.set(e.execId, e);
+    for (const e of fresh) {
+      // Attach the commission report if it arrived before the fill did.
+      const c = this.commissions.get(e.execId);
+      if (c) {
+        e.commission = c.commission;
+        if (c.realizedPnl !== undefined) e.realizedPnl = c.realizedPnl;
+      }
+      this.cache.set(e.execId, e);
+    }
     this.prune();
     this.logger.info({ count: fresh.length, symbols: [...new Set(fresh.map((e) => e.symbol))] }, 'New executions');
     this.onNewExecutions(fresh);

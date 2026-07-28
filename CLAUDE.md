@@ -50,6 +50,13 @@ Four workspaces:
     partitioned by range in `config.ts` (`reqId.historicalBase` 1000 / `streamBase` 2000 /
     `searchBase` 3000); the per-stream tick channel uses `reqId + 1_000_000`.
   - `services/ws.gateway.ts` — per-browser-client WebSocket session/subscription management.
+  - `services/flex.service.ts` + `routes/pnl.routes.ts` — the P&L calendar's data. **The TWS API
+    only returns the CURRENT day's executions** (a 90-day `ExecutionFilter` returns nothing), so
+    history comes from IBKR's **Flex Web Service** (user-supplied token + query id, stored in
+    `<DATA_DIR>/store/flex.json`; statements cached to `trades.json`). Two-step fetch:
+    `SendRequest` → ReferenceCode → `GetStatement` (retries while IBKR generates it).
+    `/api/pnl/calendar` merges Flex history with locally-collected fills for today (Flex wins per
+    date); a "trade" is a round-trip grouped per (day, symbol).
   - `services/executions.service.ts` — polls `reqExecutions` every 10s (manual TWS fills don't
     push to non-zero client ids); normalizes fills to `TradeExecution` (options carry the
     UNDERLYING symbol), persists ~5 days to `<DATA_DIR>/store/executions.json`, broadcasts new
@@ -113,7 +120,12 @@ Four workspaces:
   - `components/SideRail/` — persistent right-edge tool rail (icon buttons via a `RailItem[]`);
     extend the `railItems` array in `App.tsx` as more quick tools land. Tools: watchlist,
     RVOL scanner (`components/Scanner/`, shares the drawer slot with the watchlist — opening one
-    closes the other), and the trade-arrows toggle (persisted as `ibkr_show_trades`).
+    closes the other), the P&L calendar (`components/PnlCalendar/` — a modal, not a drawer:
+    TradeZella-style month grid, weekly totals, month stats, and the Flex setup panel), and the
+    trade-arrows toggle (persisted as `ibkr_show_trades`).
+  - Drawings carry an optional `label` (trendline / hline / rectangle), edited in the settings card
+    and drawn by `drawLabelChip` as a chip at the drawing's right edge (hline: the price readout
+    shifts left to make room).
   - `components/Watchlist/` + `hooks/useWatchlist.ts` + `lib/watchlistStore.ts` — a single global
     watchlist (localStorage `ibkr_watchlist_v1`) docked left of the rail; polls `/api/quotes` every
     30s while open. Clicking a row loads that symbol (STK/SMART/USD) into the **focused** panel.

@@ -36,6 +36,7 @@ export interface TrendLineDrawing {
   dashed?: boolean;
   extended: boolean;     // extend both directions to the chart edges
   extendRight?: boolean; // extend only the right edge to the chart edge (and beyond)
+  label?: string;        // free text, drawn as a chip at the line's right end
 }
 
 export interface HLineDrawing {
@@ -45,6 +46,7 @@ export interface HLineDrawing {
   color: string;
   width: number;
   dashed: boolean;
+  label?: string;        // free text, drawn as a chip at the right edge
 }
 
 export interface RectangleDrawing {
@@ -56,6 +58,7 @@ export interface RectangleDrawing {
   fillColor: string;
   borderWidth?: number;  // default 1
   extendRight?: boolean; // open the right edge to the chart edge (and beyond)
+  label?: string;        // free text, drawn as a chip in the top-right corner
 }
 
 // TradingView-style long/short position: entry line with a green reward zone
@@ -426,10 +429,16 @@ function renderHLine(
 
   if (selected) drawHandle(ctx, width / 2, y, d.color);
 
+  // User label sits at the far right; the price readout tucks in to its left
+  // (with no label the price keeps its original position).
+  let priceRight = width - 35;
+  const chipW = drawLabelChip(ctx, d.label, width - 4, y, d.color, 'right');
+  if (chipW) priceRight = width - 10 - chipW;
+
   // Price label
   ctx.fillStyle = d.color;
   ctx.font = '11px JetBrains Mono, monospace';
-  ctx.fillText(d.price.toFixed(2), width - 70, y - 4);
+  ctx.fillText(d.price.toFixed(2), priceRight - 35, y - 4);
 }
 
 function renderTrendLine(
@@ -472,6 +481,15 @@ function renderTrendLine(
   ctx.stroke();
   ctx.setLineDash([]);
 
+  // Label at whichever end of the line is on the right, nudged above it and
+  // clamped so the chip stays inside the plot area.
+  if (d.label) {
+    const rightIsEnd = endX >= startX;
+    const lx = rightIsEnd ? endX : startX;
+    const ly = rightIsEnd ? endY : startY;
+    drawLabelChip(ctx, d.label, Math.min(lx, width - 4), ly - 11, d.color, 'right');
+  }
+
   if (selected) {
     drawHandle(ctx, a.x, a.y, d.color);
     drawHandle(ctx, b.x, b.y, d.color);
@@ -505,6 +523,9 @@ function renderRectangle(
   ctx.strokeStyle = selected ? '#ffffff' : d.borderColor;
   ctx.lineWidth = selected ? bw + 1 : bw;
   ctx.strokeRect(x, y, w, h);
+
+  // Label inside the top-right corner.
+  drawLabelChip(ctx, d.label, right - 4, y + 11, d.borderColor, 'right');
 
   if (selected) {
     drawHandle(ctx, a.x, a.y, d.borderColor);
@@ -606,6 +627,54 @@ function renderPosition(
     drawHandle(ctx, midX, yE, POS_GRAY);
     drawHandle(ctx, x + w, yE, POS_GRAY); // width handle
   }
+}
+
+/**
+ * Draw a drawing's user label as a small chip (TradingView-style). Returns the
+ * chip's width so callers can lay other text out beside it. `align` picks which
+ * side of `x` the chip sits on ('right' = the chip ENDS at x). Saves/restores
+ * the context so font/baseline changes don't leak into other drawings.
+ */
+function drawLabelChip(
+  ctx: CanvasRenderingContext2D,
+  text: string | undefined,
+  x: number,
+  y: number,
+  color: string,
+  align: 'left' | 'right'
+): number {
+  const label = (text ?? '').trim();
+  if (!label) return 0;
+
+  ctx.save();
+  ctx.font = '11px JetBrains Mono, monospace';
+  const padX = 5;
+  const h = 16;
+  const w = Math.ceil(ctx.measureText(label).width) + padX * 2;
+  const bx = align === 'right' ? x - w : x;
+  const by = y - h / 2;
+  const r = 3;
+
+  ctx.beginPath();
+  ctx.moveTo(bx + r, by);
+  ctx.arcTo(bx + w, by, bx + w, by + h, r);
+  ctx.arcTo(bx + w, by + h, bx, by + h, r);
+  ctx.arcTo(bx, by + h, bx, by, r);
+  ctx.arcTo(bx, by, bx + w, by, r);
+  ctx.closePath();
+  // Opaque backing so the chip stays readable over candles/the line itself.
+  ctx.fillStyle = 'rgba(19,23,34,0.88)';
+  ctx.fill();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = color;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, bx + padX, y + 0.5);
+  ctx.restore();
+  return w;
 }
 
 function drawHandle(ctx: CanvasRenderingContext2D, x: number, y: number, color: string): void {
