@@ -50,6 +50,12 @@ Four workspaces:
     partitioned by range in `config.ts` (`reqId.historicalBase` 1000 / `streamBase` 2000 /
     `searchBase` 3000); the per-stream tick channel uses `reqId + 1_000_000`.
   - `services/ws.gateway.ts` — per-browser-client WebSocket session/subscription management.
+  - `services/quote-stream.service.ts` — real-time watchlist prices. The client sends its full
+    symbol set as a `watch` message; the gateway diffs it and the service keeps **one ref-counted
+    `reqMktData` line per distinct symbol** (many windows watching SPY = one line), emitting
+    throttled `quote` messages (last + prevClose). Price-only by design — volume/RVOL still come
+    from `/api/quotes` since they need daily bars. Lines are re-issued after an IBKR reconnect;
+    the gateway caps one client at 30 symbols (market-data lines are finite).
   - `services/flex.service.ts` + `routes/pnl.routes.ts` — the P&L calendar's data. **The TWS API
     only returns the CURRENT day's executions** (a 90-day `ExecutionFilter` returns nothing), so
     history comes from IBKR's **Flex Web Service** (user-supplied token + query id, stored in
@@ -127,8 +133,14 @@ Four workspaces:
     and drawn by `drawLabelChip` as a chip at the drawing's right edge (hline: the price readout
     shifts left to make room).
   - `components/Watchlist/` + `hooks/useWatchlist.ts` + `lib/watchlistStore.ts` — a single global
-    watchlist (localStorage `ibkr_watchlist_v1`) docked left of the rail; polls `/api/quotes` every
-    30s while open. Clicking a row loads that symbol (STK/SMART/USD) into the **focused** panel.
+    watchlist (localStorage `ibkr_watchlist_v1`) docked left of the rail. Clicking a row loads that
+    symbol (STK/SMART/USD) into the **focused** panel. Its data lives in **`lib/quoteStore.ts`**
+    (module-level, started once from `App.tsx`), NOT in the panel — the drawer unmounts when closed,
+    so panel-local state was thrown away on every close. The store merges two sources: `/api/quotes`
+    every 60s (prevClose, today's volume, RVOL — one serialized historical request per symbol) and
+    the WS `quote` stream (last price, live; change/% are recomputed from it). Recomputation is lazy
+    and listener notifications are throttled/skipped when the drawer is closed, so a hidden watchlist
+    costs only the poll + the market-data lines.
   - Timeframe hotkey (in `ChartPanel`, `parseTimeframe`): on the focused chart, typing a digit opens
     a TradingView-style box (`1`→1m, `30`→30m, `1d`→daily, `60`/`1h`, `240`/`4h`, `1w`); Enter or a
     ~1.1s pause applies, Esc cancels. Guards the Delete/Backspace drawing handler while mid-entry.

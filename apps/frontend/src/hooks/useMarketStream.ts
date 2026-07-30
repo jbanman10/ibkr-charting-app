@@ -7,6 +7,7 @@ import type {
   Timeframe,
   SecType,
   TradeExecution,
+  WsQuoteMsg,
 } from '@ibkr-chart/types';
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? `ws://${window.location.host}/ws`;
@@ -21,6 +22,7 @@ export interface UseMarketStreamOptions {
   onBarClose?: (symbol: string, bar: Bar, timeframe: Timeframe) => void;
   onTick?: (tick: Tick) => void;
   onExecutions?: (executions: TradeExecution[]) => void;
+  onQuote?: (quote: WsQuoteMsg) => void;
   onStatusChange?: (status: StreamStatus) => void;
 }
 
@@ -29,6 +31,8 @@ export interface UseMarketStreamReturn {
   ibkrConnected: boolean;
   subscribe: (symbol: string, secType: SecType, exchange: string, currency: string, timeframe: Timeframe, useRTH: 0 | 1 | undefined, subId: string, primaryExchange?: string) => void;
   unsubscribe: (symbol: string, subId: string) => void;
+  /** Set the watchlist's live-quote symbol set (full set; idempotent). */
+  watch: (symbols: string[]) => void;
 }
 
 export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamReturn {
@@ -42,6 +46,8 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
   // re-subscribed on reconnect — and two panels holding the SAME symbol don't
   // overwrite/kill each other's entry (they'd starve one chart's stream).
   const activeSubs = useRef<Map<string, WsSubscribeMsg>>(new Map());
+  // Latest watchlist symbol set, replayed on reconnect like the subscriptions.
+  const watchedSymbols = useRef<string[]>([]);
   const optsRef = useRef(opts);
 
   // Keep opts ref current without restarting effect
@@ -71,6 +77,9 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
       // a (re)connect — not just the last one.
       for (const msg of activeSubs.current.values()) {
         ws.send(JSON.stringify(msg));
+      }
+      if (watchedSymbols.current.length) {
+        ws.send(JSON.stringify({ type: 'watch', symbols: watchedSymbols.current }));
       }
     };
 
@@ -109,6 +118,9 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
         case 'executions':
           o.onExecutions?.(msg.executions);
           break;
+        case 'quote':
+          o.onQuote?.(msg);
+          break;
         case 'status':
           setIbkrConnected(msg.connected);
           if (!msg.connected) setStatus('ibkr_down');
@@ -141,5 +153,10 @@ export function useMarketStream(opts: UseMarketStreamOptions): UseMarketStreamRe
     send({ type: 'unsubscribe', symbol, subId });
   }, [send]);
 
-  return { status, ibkrConnected, subscribe, unsubscribe };
+  const watch = useCallback((symbols: string[]) => {
+    watchedSymbols.current = symbols;
+    send({ type: 'watch', symbols });
+  }, [send]);
+
+  return { status, ibkrConnected, subscribe, unsubscribe, watch };
 }

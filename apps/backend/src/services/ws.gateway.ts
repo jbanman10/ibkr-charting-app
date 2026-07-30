@@ -21,6 +21,12 @@ import type {
 } from '@ibkr-chart/types';
 import { IBKRService } from './ibkr.service.js';
 import { MarketDataService } from './market-data.service.js';
+import { QuoteStreamService } from './quote-stream.service.js';
+
+// Ceiling on watchlist symbols per connection. Each one holds an IBKR
+// market-data line, shared across windows but still finite (100 by default,
+// and the chart panels want some too).
+const MAX_WATCH = 30;
 
 interface ClientSession {
   ws: WebSocket;
@@ -28,6 +34,10 @@ interface ClientSession {
   // client's per-panel subId so several panels on ONE connection can hold the
   // same symbol without replacing/killing each other's stream.
   subscriptions: Map<string, () => void>;
+  // Watchlist symbols this connection wants live quotes for (ref-counted in
+  // QuoteStreamService), plus its listener handle.
+  watched: Set<string>;
+  quoteUnsub: (() => void) | null;
 }
 
 export class WebSocketGateway {
@@ -35,11 +45,13 @@ export class WebSocketGateway {
   private clients = new Map<WebSocket, ClientSession>();
   private ibkr: IBKRService;
   private marketData: MarketDataService;
+  private quotes: QuoteStreamService;
   private logger: Logger;
 
   private constructor(ibkr: IBKRService, marketData: MarketDataService, logger: Logger) {
     this.ibkr = ibkr;
     this.marketData = marketData;
+    this.quotes = QuoteStreamService.getInstance(ibkr, logger);
     this.logger = logger.child({ service: 'WebSocketGateway' });
 
     // Forward IBKR connection status to all clients
@@ -72,7 +84,7 @@ export class WebSocketGateway {
   // ─── Called by Fastify route handler ───────────────────────────────────────
 
   handleConnection(ws: WebSocket): void {
-    const session: ClientSession = { ws, subscriptions: new Map() };
+    const session: ClientSession = { ws, subscriptions: new Map(), watched: new Set(), quoteUnsub: null };
     this.clients.set(ws, session);
     this.logger.info({ clients: this.clients.size }, 'WebSocket client connected');
 
@@ -108,6 +120,9 @@ export class WebSocketGateway {
         break;
       case 'unsubscribe':
         this.handleUnsubscribe(session, msg.subId ?? msg.symbol);
+        break;
+      case 'watch':
+        this.handleWatch(ws, session, msg.symbols);
         break;
       default:
         this.send(ws, { type: 'error', code: 400, message: 'Unknown message type' });
@@ -175,12 +190,55 @@ export class WebSocketGateway {
     }
   }
 
+  /**
+   * Set this connection's live-quote symbol set. The client always sends the
+   * FULL desired set, so this diffs rather than accumulating — an idempotent
+   * message is safe to replay verbatim after a reconnect.
+   */
+  private handleWatch(ws: WebSocket, session: ClientSession, symbols: string[]): void {
+    const next = new Set(
+      (Array.isArray(symbols) ? symbols : [])
+        .map((s) => String(s).trim().toUpperCase())
+        .filter(Boolean)
+        .slice(0, MAX_WATCH)
+    );
+
+    for (const sym of session.watched) if (!next.has(sym)) this.quotes.release(sym);
+    for (const sym of next) if (!session.watched.has(sym)) this.quotes.retain(sym);
+    session.watched = next;
+
+    if (!next.size) {
+      session.quoteUnsub?.();
+      session.quoteUnsub = null;
+      return;
+    }
+
+    if (!session.quoteUnsub) {
+      session.quoteUnsub = this.quotes.onQuote((q) => {
+        if (session.watched.has(q.symbol)) {
+          this.send(session.ws, { type: 'quote', symbol: q.symbol, last: q.last, prevClose: q.prevClose });
+        }
+      });
+    }
+
+    // Seed newly-watched symbols from the shared line's current values so the
+    // client isn't blank until the next print (quiet symbols, or after hours).
+    for (const sym of next) {
+      const q = this.quotes.snapshot(sym);
+      if (q) this.send(ws, { type: 'quote', symbol: q.symbol, last: q.last, prevClose: q.prevClose });
+    }
+  }
+
   private handleClose(ws: WebSocket, session: ClientSession): void {
     // Cancel all subscriptions for this client
     for (const [, unsub] of session.subscriptions) {
       unsub();
     }
     session.subscriptions.clear();
+    for (const sym of session.watched) this.quotes.release(sym);
+    session.watched.clear();
+    session.quoteUnsub?.();
+    session.quoteUnsub = null;
     this.clients.delete(ws);
     this.logger.info({ clients: this.clients.size }, 'WebSocket client disconnected');
   }

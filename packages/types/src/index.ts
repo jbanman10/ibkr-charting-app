@@ -120,11 +120,13 @@ export const TIMEFRAMES: Record<Timeframe, TimeframeConfig> = {
 export type WsMessageType =
   | 'subscribe'
   | 'unsubscribe'
+  | 'watch'
   | 'snapshot'
   | 'tick'
   | 'bar_update'
   | 'bar_close'
   | 'executions'
+  | 'quote'
   | 'status'
   | 'error';
 
@@ -151,7 +153,15 @@ export interface WsUnsubscribeMsg {
   subId?: string; // Must match the subscribe's subId (falls back to symbol key).
 }
 
-export type WsClientMsg = WsSubscribeMsg | WsUnsubscribeMsg;
+// Watchlist real-time quotes. The client sends its FULL desired symbol set
+// (idempotent — the server diffs it against what this connection already holds),
+// and the backend keeps one ref-counted reqMktData line per distinct symbol.
+export interface WsWatchMsg {
+  type: 'watch';
+  symbols: string[];
+}
+
+export type WsClientMsg = WsSubscribeMsg | WsUnsubscribeMsg | WsWatchMsg;
 
 // Server → Client
 export interface WsSnapshotMsg {
@@ -186,6 +196,16 @@ export interface WsExecutionsMsg {
   executions: TradeExecution[];
 }
 
+// Live watchlist price. Deliberately price-only: today's volume and RVOL still
+// come from the slower /api/quotes poll (they need daily bars anyway), while
+// last/change/% update in real time from the market-data line.
+export interface WsQuoteMsg {
+  type: 'quote';
+  symbol: string;
+  last: number;
+  prevClose: number | null; // IBKR's CLOSE tick (previous session's close)
+}
+
 export interface WsStatusMsg {
   type: 'status';
   connected: boolean;
@@ -204,6 +224,7 @@ export type WsServerMsg =
   | WsBarUpdateMsg
   | WsBarCloseMsg
   | WsExecutionsMsg
+  | WsQuoteMsg
   | WsStatusMsg
   | WsErrorMsg;
 
