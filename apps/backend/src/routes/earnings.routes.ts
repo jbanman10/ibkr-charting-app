@@ -121,9 +121,12 @@ async function fetchEarnings(symbol: string): Promise<EarningsInfo> {
     if (median > 45 * 86_400 && median < 200 * 86_400) {
       let projected = history[0].date + median;
       const today = Math.floor(Date.now() / 1000);
-      // If we're already past the projection (a report we haven't seen yet),
-      // roll forward a cadence at a time rather than showing a stale date.
-      while (projected < today) projected += median;
+      // A projection that's only a little stale almost always means the real
+      // report is imminent (or just happened) and the vendor hasn't published
+      // it yet — rolling forward a whole quarter there would HIDE the event.
+      // Only skip ahead once the projection is clearly missed.
+      const GRACE = 14 * 86_400;
+      while (projected < today - GRACE) projected += median;
       next = { date: projected, timing: null, consensusEps: null, estimated: true };
     }
   }

@@ -31,6 +31,17 @@ import styles from './ChartPanel.module.css';
 // Session overlays only make sense on fine-grained intraday timeframes.
 const INTRADAY_TF: ReadonlySet<string> = new Set(['1m', '5m', '15m', '30m', '1h']);
 
+const ET_DAY_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' });
+
+/**
+ * Today's ET calendar date as a UTC-midnight unix timestamp — the same basis
+ * earnings dates and daily bar times use, so day arithmetic between them is
+ * exact (differencing against `Date.now()` loses a day for most of the session).
+ */
+function etMidnightUtc(): number {
+  return Date.parse(`${ET_DAY_FMT.format(new Date())}T00:00:00Z`) / 1000;
+}
+
 // TradingView-style timeframe hotkey: parse a typed resolution string into one
 // of our supported timeframes. Bare numbers are minutes (60→1h, 240→4h); a
 // letter suffix picks the unit ("1d"/"d" daily, "1w"/"w" weekly, "1h"/"4h").
@@ -578,20 +589,30 @@ export default function ChartPanel({
     const nx = earnings.next;
     if (nx) {
       const lastBar = Number(seriesBars[seriesBars.length - 1].time);
+      const detail = {
+        dateLabel: dayLabel(nx.date),
+        consensus: nx.consensusEps,
+        timing: nx.timing,
+        estimated: nx.estimated,
+      };
       if (nx.date > lastBar) {
-        // Calendar days → trading days (the daily scale advances one index per
-        // session), so the badge lands on roughly the right future session.
+        // Future: place it past the last bar. Calendar days → trading days (the
+        // daily scale advances one index per session).
         const calDays = Math.round((nx.date - lastBar) / 86_400);
         const barsAhead = Math.max(1, Math.round(calDays * (5 / 7)));
-        marks.push({
-          kind: 'upcoming', barsAhead, estimated: nx.estimated,
-          detail: {
-            dateLabel: dayLabel(nx.date),
-            consensus: nx.consensusEps,
-            timing: nx.timing,
-            estimated: nx.estimated,
-          },
-        });
+        marks.push({ kind: 'upcoming', barsAhead, estimated: nx.estimated, detail });
+      } else {
+        // The report is TODAY (or just passed): today's bar now exists, so pin
+        // the badge to it instead of dropping it — you most want to see "E" on
+        // the session a print lands in. Skip if a reported badge already owns
+        // that bar so the two can't stack.
+        const barTime = snapToBar(nx.date);
+        if (barTime != null) {
+          const key = unixToDayString(barTime);
+          if (!marks.some((m) => m.time === key)) {
+            marks.push({ kind: 'upcoming', time: key as Time, estimated: nx.estimated, detail });
+          }
+        }
       }
     }
     handle.setEarningsMarks(marks);
@@ -843,15 +864,24 @@ export default function ChartPanel({
   const nextEarnings = useMemo(() => {
     const n = earnings?.next;
     if (!n) return null;
-    const days = Math.round((n.date * 1000 - Date.now()) / 86_400_000);
-    if (days < -1) return null; // stale upstream date, already reported
+    // Count CALENDAR days between today's ET date and the report date. Earnings
+    // dates are UTC-midnight stamps of a US market date, so differencing them
+    // against the current instant loses a day for most of the ET session.
+    const days = Math.round((n.date - etMidnightUtc()) / 86_400);
+    // Confirmed dates stop being interesting the day after; a projection stays
+    // (it's a rough marker) until it's clearly stale.
+    if (days < (n.estimated ? -14 : -1)) return null;
     const label = new Date(n.date * 1000).toLocaleDateString('en-US', {
       timeZone: 'UTC', month: 'short', day: 'numeric',
     });
-    const when = days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days}d`;
+    const when = days === 0 ? 'today'
+      : days === 1 ? 'tomorrow'
+      : days === -1 ? 'yesterday'
+      : days > 0 ? `in ${days}d`
+      : `${-days}d ago`;
     return {
       label: n.estimated ? `~${label}` : label, // ~ = projected, not yet confirmed
-      when, soon: days <= 7, timing: n.timing, consensusEps: n.consensusEps,
+      when, soon: days >= 0 && days <= 7, timing: n.timing, consensusEps: n.consensusEps,
       estimated: n.estimated,
     };
   }, [earnings]);
