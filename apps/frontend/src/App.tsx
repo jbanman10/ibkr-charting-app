@@ -14,6 +14,12 @@ import {
 import type { DrawingToolType } from './components/Chart/DrawingCanvas';
 import { useMarketStream } from './hooks/useMarketStream';
 import { addExecutions } from './lib/executionStore';
+import {
+  startQuoteStore,
+  setWatchSender,
+  setQuotesConnected,
+  applyLiveQuote,
+} from './lib/quoteStore';
 import ChartPanel from './components/Chart/ChartPanel';
 import ResizableGrid from './components/Grid/ResizableGrid';
 import LayoutPicker from './components/Grid/LayoutPicker';
@@ -86,13 +92,22 @@ export default function App() {
     }
   }, []);
 
-  const { status, ibkrConnected, subscribe, unsubscribe } = useMarketStream({
+  const { status, ibkrConnected, subscribe, unsubscribe, watch } = useMarketStream({
     onSnapshot:  useCallback((sym: string, bars: Bar[], tf: Timeframe) => routeSnapshot(sym, bars, tf), [routeSnapshot]),
     onBarUpdate: useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barUpdateHandler', sym, bar, tf), [routeBar]),
     onBarClose:  useCallback((sym: string, bar: Bar, tf: Timeframe) => routeBar('__barCloseHandler',  sym, bar, tf), [routeBar]),
     onTick:      useCallback((tick: Tick) => routeTick(tick), [routeTick]),
     onExecutions: addExecutions, // store notifies subscribed panels directly
+    onQuote:      applyLiveQuote, // watchlist prices — quoteStore notifies the drawer
   });
+
+  // ─── Watchlist quotes ──────────────────────────────────────────────────────
+  // The store runs for the whole app session, not just while the drawer is open,
+  // so closing the watchlist no longer throws its data away.
+
+  useEffect(() => { startQuoteStore(); }, []);
+  useEffect(() => { setWatchSender(watch); return () => setWatchSender(null); }, [watch]);
+  useEffect(() => { setQuotesConnected(ibkrConnected); }, [ibkrConnected]);
 
   // ─── Layout switching ──────────────────────────────────────────────────────
 

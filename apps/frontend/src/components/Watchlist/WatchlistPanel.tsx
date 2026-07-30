@@ -34,7 +34,7 @@ function rvolClass(rvol: number): string {
 }
 
 export default function WatchlistPanel({ ibkrConnected, focusedSymbol, onSelect, onClose }: Props) {
-  const { symbols, quotes, loading, add, remove } = useWatchlist(true, ibkrConnected);
+  const { symbols, quotes, loading, add, remove } = useWatchlist();
   const [draft, setDraft] = useState('');
 
   const submitAdd = useCallback(() => {

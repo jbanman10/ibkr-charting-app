@@ -1,10 +1,17 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useEffect, useReducer } from 'react';
 import type { QuoteResult } from '@ibkr-chart/types';
-import { loadWatchlist, saveWatchlist } from '../lib/watchlistStore';
+import {
+  getWatchSymbols,
+  getQuotes,
+  isQuotesLoading,
+  addWatchSymbol,
+  removeWatchSymbol,
+  refreshQuotes,
+  subscribeQuotes,
+} from '../lib/quoteStore';
 
-// Poll the batch-quote endpoint while the watchlist is open. Each poll is one
-// `/api/quotes` request (serialized backend-side), so keep it gentle.
-const REFRESH_MS = 30_000;
+// A thin view onto the global quoteStore. The data itself lives outside React
+// so it keeps updating while the watchlist drawer is closed (see quoteStore).
 
 export interface UseWatchlistReturn {
   symbols: string[];
@@ -15,51 +22,17 @@ export interface UseWatchlistReturn {
   refresh: () => void;
 }
 
-export function useWatchlist(enabled: boolean, ibkrConnected: boolean): UseWatchlistReturn {
-  const [symbols, setSymbols] = useState<string[]>(loadWatchlist);
-  const [quotes, setQuotes] = useState<Record<string, QuoteResult>>({});
-  const [loading, setLoading] = useState(false);
+export function useWatchlist(): UseWatchlistReturn {
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
 
-  const symbolsRef = useRef(symbols);
-  useEffect(() => { symbolsRef.current = symbols; saveWatchlist(symbols); }, [symbols]);
+  useEffect(() => subscribeQuotes(rerender), []);
 
-  const add = useCallback((symbol: string) => {
-    const s = symbol.trim().toUpperCase();
-    if (!s) return;
-    setSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
-  }, []);
-
-  const remove = useCallback((symbol: string) => {
-    setSymbols((prev) => prev.filter((x) => x !== symbol));
-    setQuotes((prev) => { const { [symbol]: _drop, ...rest } = prev; return rest; });
-  }, []);
-
-  const fetchQuotes = useCallback(async (signal?: AbortSignal) => {
-    const syms = symbolsRef.current;
-    if (!syms.length) { setQuotes({}); return; }
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/quotes?symbols=${encodeURIComponent(syms.join(','))}`, { signal });
-      if (!res.ok) return;
-      const body = (await res.json()) as { quotes?: QuoteResult[] };
-      const map: Record<string, QuoteResult> = {};
-      for (const q of body.quotes ?? []) map[q.symbol] = q;
-      setQuotes(map);
-    } catch { /* transient / aborted — next cycle retries */ }
-    finally { setLoading(false); }
-  }, []);
-
-  const refresh = useCallback(() => { void fetchQuotes(); }, [fetchQuotes]);
-
-  // Poll only while open + connected. Re-fetch immediately when the list changes
-  // (add/remove) so a new ticker shows a price without waiting a full cycle.
-  useEffect(() => {
-    if (!enabled || !ibkrConnected) return;
-    const ctrl = new AbortController();
-    void fetchQuotes(ctrl.signal);
-    const t = setInterval(() => void fetchQuotes(ctrl.signal), REFRESH_MS);
-    return () => { ctrl.abort(); clearInterval(t); };
-  }, [enabled, ibkrConnected, symbols, fetchQuotes]);
-
-  return { symbols, quotes, loading, add, remove, refresh };
+  return {
+    symbols: getWatchSymbols(),
+    quotes: getQuotes(),
+    loading: isQuotesLoading(),
+    add: addWatchSymbol,
+    remove: removeWatchSymbol,
+    refresh: refreshQuotes,
+  };
 }

@@ -25,5 +25,6 @@ export const config = {
     searchBase: 3000,
     execBase: 4000,
     scanBase: 5000,
+    quoteBase: 6000,
   },
 } as const;
