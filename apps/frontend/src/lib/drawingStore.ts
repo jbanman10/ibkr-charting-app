@@ -91,15 +91,56 @@ function persist(): void {
   saveToDisk();
 }
 
+// ─── Undo ─────────────────────────────────────────────────────────────────────
+//
+// Every edit that comes from a user action pushes the PREVIOUS list for that
+// symbol onto its stack, so Ctrl+Z restores it. In-memory and per session: the
+// point is to take back the drawing you just deleted by accident, not to
+// replay history across restarts.
+//
+// Background edits must opt out (`undoable: false`) — an alert flipping to
+// triggered is not something the user did, and it would otherwise bury the
+// real edits under noise.
+
+const UNDO_LIMIT = 60;
+const undoStacks = new Map<string, Drawing[][]>();
+
 export function getDrawings(symbol: string): Drawing[] {
   return load()[symbol] ?? [];
 }
 
-export function setDrawings(symbol: string, drawings: Drawing[]): void {
+export function setDrawings(
+  symbol: string,
+  drawings: Drawing[],
+  opts: { undoable?: boolean } = {}
+): void {
   const store = load();
+  if (opts.undoable !== false) {
+    const stack = undoStacks.get(symbol) ?? [];
+    stack.push(store[symbol] ? [...store[symbol]] : []);
+    if (stack.length > UNDO_LIMIT) stack.shift();
+    undoStacks.set(symbol, stack);
+  }
   store[symbol] = drawings;
   persist();
   for (const l of listeners) l(symbol);
+}
+
+/** How many undo steps are available for a symbol. */
+export function undoDepth(symbol: string): number {
+  return undoStacks.get(symbol)?.length ?? 0;
+}
+
+/** Restore the previous drawing list. Returns false when there's nothing to undo. */
+export function undoDrawings(symbol: string): boolean {
+  const stack = undoStacks.get(symbol);
+  if (!stack?.length) return false;
+  const prev = stack.pop()!;
+  const store = load();
+  store[symbol] = prev;
+  persist();
+  for (const l of listeners) l(symbol);
+  return true;
 }
 
 /** Seed a symbol's drawings only if it has none yet (used to migrate legacy per-panel drawings). */

@@ -88,6 +88,9 @@ export const indicatorColors: Record<string, string> = {
   'EMA-5-D':   '#38bdf8',
   'EMA-20-D':  '#f59e0b',
   'EMA-200-D': '#e5e7eb',
+  // Bollinger Bands — TradingView's defaults: blue edges, orange basis.
+  'BB-20':     '#2962ff',
+  'BB-50':     '#2962ff',
 };
 
 export function getIndicatorLineOptions(key: string): DeepPartial<LineSeriesOptions> {

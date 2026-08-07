@@ -8,11 +8,13 @@ import { seedDrawings, getDrawings } from '../../lib/drawingStore';
 import { newDrawingId, unixToDayString } from '../../lib/drawings';
 import { ensureAudio, playQuack, shouldFire } from '../../lib/quack';
 import { getExecutions, subscribeExecutions } from '../../lib/executionStore';
+import { getActiveTrade, subscribeJournal, setActiveTrade } from '../../lib/journalStore';
+import { buildJournalMarkers } from '../../lib/tradeMarkers';
 import { getEarnings, subscribeEarnings } from '../../lib/earningsStore';
 import type { EarningsMark, EarningsMarkDetail } from '../../lib/earningsPrimitive';
 import type { EarningsInfo } from '@ibkr-chart/types';
 import type { SeriesMarker, Time } from 'lightweight-charts';
-import { computeIndicators, computeDailyIndicators, indicatorKey } from '../../lib/indicators';
+import { computeIndicators, computeDailyIndicators, indicatorKey, baseIndicatorKey } from '../../lib/indicators';
 import { computeSessionLevels, computeSessionRegions } from '../../lib/sessions';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
 import type { SessionOverlays, SessionLevelStyle } from '../../lib/layout';
@@ -176,6 +178,9 @@ export default function ChartPanel({
   const [hoverVolume, setHoverVolume] = useState<number | null>(null);
   // Earnings: next report date + last 4 quarters (bubbles on the daily chart).
   const [earnings, setEarnings] = useState<EarningsInfo | null>(null);
+  // Trade being reviewed from the P&L journal — its legs draw as labelled
+  // entry/exit markers on top of the ordinary fill arrows.
+  const [journalTrade, setJournalTrade] = useState(getActiveTrade);
   // Detail popover for a clicked earnings badge (null = closed).
   const [erPopover, setErPopover] = useState<
     { detail: EarningsMarkDetail; kind: EarningsMark['kind']; x: number } | null
@@ -282,12 +287,40 @@ export default function ChartPanel({
     prevPriceRef.current = null;
     dailyBarsRef.current = []; // the daily-bars effect refetches for the new symbol
     setBars([]);
+
+    // ─ Journal review: a fixed past session, loaded once over REST ─
+    // keepUpToDate can only stream the LIVE window, so a session from months
+    // ago is fetched as history ending at that day's post-market close and
+    // rendered through the same snapshot path. No stream, no re-sync.
+    if (panel.sessionEnd) {
+      const ctrl = new AbortController();
+      void (async () => {
+        try {
+          const params = new URLSearchParams({
+            symbol: panel.symbol, secType: panel.secType, exchange: panel.exchange,
+            currency: panel.currency, timeframe: panel.timeframe,
+            useRTH: String(panel.useRTH ?? 0), end: String(panel.sessionEnd),
+          });
+          if (panel.primaryExchange) params.set('primaryExchange', panel.primaryExchange);
+          const res = await fetch(`/api/bars?${params}`, { signal: ctrl.signal });
+          if (!res.ok) { setError(`Could not load that session (${res.status})`); setLoading(false); return; }
+          const body = (await res.json()) as { bars?: Bar[] };
+          gotSnapshotRef.current = true;
+          renderSnapshot(body.bars ?? []);
+          setLoading(false);
+        } catch (err) {
+          if ((err as Error)?.name !== 'AbortError') { setError('Could not load that session'); setLoading(false); }
+        }
+      })();
+      return () => ctrl.abort();
+    }
+
     subscribe(panel.symbol, panel.secType, panel.exchange, panel.currency, panel.timeframe, (panel.useRTH ?? 0) as 0 | 1, panel.id, panel.primaryExchange);
     const t = setTimeout(() => {
       if (!gotSnapshotRef.current) { setError('No data received'); setLoading(false); }
     }, 30_000);
     return () => { clearTimeout(t); unsubscribe(panel.symbol, panel.id); };
-  }, [panel.id, panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [panel.id, panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, panel.sessionEnd, ibkrConnected]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Periodic history re-sync — a backstop for late-reported prints, IBKR's
   // penny-level history revisions, and the extended-hours NBBO clamp (via
@@ -300,6 +333,7 @@ export default function ChartPanel({
   // is actually looking at it.
   useEffect(() => {
     if (!panel.symbol) return;
+    if (panel.sessionEnd) return; // a reviewed past session is already final
     const REFRESH_MS = 180_000 + Math.random() * 30_000;
     const MIN_GAP_MS = 20_000; // visibility flaps shouldn't hammer /api/bars
     const ctrl = new AbortController();
@@ -340,7 +374,7 @@ export default function ChartPanel({
     const onVisible = () => { if (document.visibilityState === 'visible') void resync(); };
     document.addEventListener('visibilitychange', onVisible);
     return () => { ctrl.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
-  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, applyIndicators, recomputeSessions]);
+  }, [panel.symbol, panel.secType, panel.exchange, panel.currency, panel.primaryExchange, panel.timeframe, panel.useRTH, panel.sessionEnd, applyIndicators, recomputeSessions]);
 
   // ─── Stream handlers (snapshot / bar_update / bar_close) ───────────────────
   //
@@ -499,7 +533,7 @@ export default function ChartPanel({
 
   // Drawings live in a per-symbol store so they appear on every chart of this
   // symbol (any timeframe / any panel), lined up by absolute time.
-  const [drawings, setDrawings] = useSymbolDrawings(panel.symbol);
+  const [drawings, setDrawings, drawingUndo] = useSymbolDrawings(panel.symbol);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
   const [showDrawingSettings, setShowDrawingSettings] = useState(false);
   const [rectColor, setRectColor] = useState<RectColor>(RECT_PALETTE[0]);
@@ -560,6 +594,13 @@ export default function ChartPanel({
       }
     }
 
+    // A trade opened from the journal marks every one of its legs, labelled
+    // Entry/Exit (and numbered when it was scaled). Drawn brighter and larger
+    // than the ambient fill arrows so the reviewed trade stands out among them.
+    if (journalTrade && journalTrade.symbol === panel.symbol) {
+      markers.push(...buildJournalMarkers(journalTrade, seriesBars, forming, daily));
+    }
+
     handle.setMarkers(markers);
 
     // Earnings badges pinned to the bottom of the pane (daily/weekly only — on
@@ -616,7 +657,7 @@ export default function ChartPanel({
       }
     }
     handle.setEarningsMarks(marks);
-  }, [panel.symbol, panel.timeframe, showTrades, earnings]);
+  }, [panel.symbol, panel.timeframe, showTrades, earnings, journalTrade]);
 
   // Refresh arrows when bars change (snapshot / bar close / timeframe) and when
   // new fills arrive for this symbol.
@@ -624,6 +665,9 @@ export default function ChartPanel({
     rebuildMarkers();
     return subscribeExecutions((sym) => { if (sym === panel.symbol) rebuildMarkers(); });
   }, [bars, rebuildMarkers, panel.symbol]);
+
+  // The trade currently under review in the journal (drawn as labelled legs).
+  useEffect(() => subscribeJournal(() => setJournalTrade(getActiveTrade())), []);
 
   // Earnings (next date + last 4 quarters) for this symbol — cached per symbol.
   useEffect(() => {
@@ -667,7 +711,8 @@ export default function ChartPanel({
         }
         return { ...d, triggeredAt: Date.now() };
       });
-      if (changed) setDrawings(next);
+      // Not a user edit — keep it out of the undo history.
+      if (changed) setDrawings(next, { undoable: false });
     };
   }, [panel.symbol, setDrawings]);
 
@@ -719,16 +764,18 @@ export default function ChartPanel({
 
   // Indicator settings card, opened by double-clicking an MA line. Keyed by the
   // same `indicatorKey` the chart series use (daily MAs get a `-D` suffix).
+  // Double-clicking a Bollinger edge yields a suffixed series key ("BB-20:upper"),
+  // so the lookup runs on the base key — all three lines open the one config.
   const [indicatorSettingsKey, setIndicatorSettingsKey] = useState<string | null>(null);
   const settingsIndicator = indicatorSettingsKey
-    ? panel.indicators.find((i) => indicatorKey(i) === indicatorSettingsKey) ?? null
+    ? panel.indicators.find((i) => indicatorKey(i) === baseIndicatorKey(indicatorSettingsKey)) ?? null
     : null;
 
   const updateSettingsIndicator = useCallback((patch: Partial<IndicatorConfig>) => {
     if (!indicatorSettingsKey) return;
     onPanelChange({
       indicators: panel.indicators.map((i) =>
-        indicatorKey(i) === indicatorSettingsKey ? { ...i, ...patch } : i
+        indicatorKey(i) === baseIndicatorKey(indicatorSettingsKey) ? { ...i, ...patch } : i
       ),
     });
   }, [indicatorSettingsKey, panel.indicators, onPanelChange]);
@@ -736,7 +783,7 @@ export default function ChartPanel({
   const removeSettingsIndicator = useCallback(() => {
     if (!indicatorSettingsKey) return;
     onPanelChange({
-      indicators: panel.indicators.filter((i) => indicatorKey(i) !== indicatorSettingsKey),
+      indicators: panel.indicators.filter((i) => indicatorKey(i) !== baseIndicatorKey(indicatorSettingsKey)),
     });
     setIndicatorSettingsKey(null);
   }, [indicatorSettingsKey, panel.indicators, onPanelChange]);
@@ -776,6 +823,25 @@ export default function ChartPanel({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [indicatorSettingsKey, sessionLevelKey]);
+
+  // Ctrl+Z (⌘Z) undoes the last drawing edit on the focused panel's symbol —
+  // most importantly a delete. Separate from the Delete/Escape handler below
+  // because that one only runs while something is selected, and undo has to work
+  // right after a delete has cleared the selection.
+  useEffect(() => {
+    if (!isFocused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+      e.preventDefault();
+      drawingUndo.undo();
+      setSelectedDrawingId(null);
+      setShowDrawingSettings(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isFocused, drawingUndo]);
 
   // Backspace/Delete removes the highlighted drawing; Escape deselects. Scoped to
   // the focused panel and ignored while typing in inputs.
@@ -929,7 +995,24 @@ export default function ChartPanel({
           onToolChange={onToolChange}
           onClearDrawings={() => { setDrawings([]); setSelectedDrawingId(null); }}
           drawingCount={drawings.length}
+          canUndo={drawingUndo.canUndo}
+          onUndo={() => { drawingUndo.undo(); setSelectedDrawingId(null); setShowDrawingSettings(false); }}
         />
+        {panel.sessionEnd && (
+          <button
+            className={styles.reviewChip}
+            onClick={(e) => {
+              e.stopPropagation();
+              setActiveTrade(null);
+              onPanelChange({ sessionEnd: undefined, sessionLabel: undefined });
+            }}
+            title="Reviewing a past session (not live) — click to return to the live chart"
+          >
+            <span className={styles.reviewDot} />
+            Reviewing {panel.sessionLabel ?? 'session'}
+            <span className={styles.reviewClose}>✕</span>
+          </button>
+        )}
         <div className={styles.panelActions}>
           <button
             className={`${styles.actionBtn} ${showIndicators ? styles.actionActive : ''}`}

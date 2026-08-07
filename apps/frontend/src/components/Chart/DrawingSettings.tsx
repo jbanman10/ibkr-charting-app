@@ -24,6 +24,7 @@ const TITLES: Record<Drawing['type'], string> = {
   rectangle: 'Rectangle',
   position: 'Position',
   alert: 'Price Alert',
+  callout: 'Text Bubble',
 };
 
 const WIDTHS = [1, 2, 3, 4];
@@ -78,6 +79,114 @@ export default function DrawingSettings({ drawing, onChange, onDelete, onClose }
         )}
         <div className={styles.footer}>
           <button className={styles.deleteBtn} onClick={onDelete}>Delete alert</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Text bubble: the text itself is the point, so it leads and takes focus.
+  if (drawing.type === 'callout') {
+    return (
+      <div
+        className={styles.root}
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className={styles.header}>
+          <span className={styles.title}>{TITLES.callout}</span>
+          <button className={styles.closeBtn} onClick={onClose} title="Close (Esc)">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+              <path d="M2 2l8 8M10 2L2 10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <div className={styles.row}>
+          <span className={styles.label}>Text</span>
+          <textarea
+            className={styles.textArea}
+            value={drawing.text}
+            placeholder="Type here…"
+            rows={3}
+            maxLength={240}
+            spellCheck={false}
+            // Autofocus: the bubble is created empty and this card opens with it,
+            // so the caret should already be waiting in the box.
+            autoFocus
+            onChange={(e) => onChange({ text: e.target.value } as Partial<Drawing>)}
+          />
+        </div>
+
+        <div className={styles.row}>
+          <span className={styles.label}>Color</span>
+          <div className={styles.swatches}>
+            {RECT_PALETTE.map((c) => (
+              <button
+                key={c.name}
+                className={`${styles.swatch} ${drawing.color === c.border ? styles.swatchActive : ''}`}
+                style={{ background: c.border }}
+                onClick={() => onChange({ color: c.border } as Partial<Drawing>)}
+                title={c.name}
+              />
+            ))}
+            <label className={styles.customSwatch} title="Custom color">
+              <svg width="11" height="11" viewBox="0 0 14 14" fill="none">
+                <path d="M7 1v12M1 7h12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+              </svg>
+              <input
+                type="color"
+                value={/^#[0-9a-fA-F]{6}$/.test(drawing.color) ? drawing.color : '#3d7eff'}
+                onChange={(e) => onChange({ color: e.target.value } as Partial<Drawing>)}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className={styles.row}>
+          <span className={styles.label}>Fill</span>
+          <div className={styles.btnGroup}>
+            <button
+              className={`${styles.opt} ${drawing.fillColor.startsWith('rgba(19,23,34') ? styles.optActive : ''}`}
+              onClick={() => onChange({ fillColor: 'rgba(19,23,34,0.92)' } as Partial<Drawing>)}
+              title="Dark background"
+            >
+              Dark
+            </button>
+            <button
+              className={`${styles.opt} ${drawing.fillColor === hexToRgba(drawing.color, 0.18) ? styles.optActive : ''}`}
+              onClick={() => onChange({ fillColor: hexToRgba(drawing.color, 0.18) } as Partial<Drawing>)}
+              title="Tinted with the bubble colour"
+            >
+              Tint
+            </button>
+            <button
+              className={`${styles.opt} ${drawing.fillColor === 'transparent' ? styles.optActive : ''}`}
+              onClick={() => onChange({ fillColor: 'transparent' } as Partial<Drawing>)}
+              title="No background"
+            >
+              None
+            </button>
+          </div>
+        </div>
+
+        <div className={styles.row}>
+          <span className={styles.label}>Border</span>
+          <div className={styles.btnGroup}>
+            {WIDTHS.map((w) => (
+              <button
+                key={w}
+                className={`${styles.opt} ${(drawing.width ?? 1) === w ? styles.optActive : ''}`}
+                onClick={() => onChange({ width: w } as Partial<Drawing>)}
+                title={`${w}px`}
+              >
+                <span className={styles.widthPreview} style={{ height: w }} />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className={styles.footer}>
+          <button className={styles.deleteBtn} onClick={onDelete}>Delete drawing</button>
         </div>
       </div>
     );

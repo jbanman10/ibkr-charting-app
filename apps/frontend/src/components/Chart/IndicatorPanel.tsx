@@ -1,7 +1,7 @@
 import React from 'react';
 import type { IndicatorConfig } from '@ibkr-chart/types';
 import { indicatorColors, SESSION_COLORS } from '../../lib/chartTheme';
-import { indicatorKey } from '../../lib/indicators';
+import { indicatorKey, BB_DEFAULT_STDDEV, BB_DEFAULT_BASIS_COLOR } from '../../lib/indicators';
 import type { SessionOverlays } from '../../lib/layout';
 import styles from './IndicatorPanel.module.css';
 
@@ -19,7 +19,7 @@ const SESSION_TOGGLES: Array<{ key: keyof SessionOverlays; label: string; color:
   { key: 'shading',      label: 'Session shading',    color: SESSION_COLORS.premarket },
 ];
 
-type Preset = { type: 'SMA' | 'EMA'; period: number; source?: 'daily' };
+type Preset = { type: IndicatorConfig['type']; period: number; source?: 'daily'; label?: string };
 
 const PRESETS: Preset[] = [
   { type: 'EMA', period: 9 },
@@ -37,6 +37,13 @@ const DAILY_PRESETS: Preset[] = [
   { type: 'SMA', period: 200, source: 'daily' },
 ];
 
+// Bollinger Bands — always computed on the panel's own bars, so the values
+// follow whatever timeframe the chart is on. 20/2 is TradingView's default.
+const BAND_PRESETS: Preset[] = [
+  { type: 'BB', period: 20, label: 'Bollinger 20' },
+  { type: 'BB', period: 50, label: 'Bollinger 50' },
+];
+
 export default function IndicatorPanel({ indicators, onChange, sessionOverlays, onSessionOverlaysChange }: Props) {
   const toggle = (p: Preset) => {
     const key = indicatorKey(p);
@@ -45,10 +52,15 @@ export default function IndicatorPanel({ indicators, onChange, sessionOverlays, 
     if (existing) {
       onChange(indicators.map((i) => (indicatorKey(i) === key ? { ...i, visible: !i.visible } : i)));
     } else {
-      onChange([
-        ...indicators,
-        { type: p.type, period: p.period, source: p.source, color: indicatorColors[key] ?? '#8a95a8', visible: true },
-      ]);
+      const added: IndicatorConfig = {
+        type: p.type, period: p.period, source: p.source,
+        color: indicatorColors[key] ?? '#8a95a8', visible: true,
+      };
+      if (p.type === 'BB') {
+        added.stdDev = BB_DEFAULT_STDDEV;
+        added.basisColor = BB_DEFAULT_BASIS_COLOR;
+      }
+      onChange([...indicators, added]);
     }
   };
 
@@ -70,7 +82,7 @@ export default function IndicatorPanel({ indicators, onChange, sessionOverlays, 
         onClick={() => toggle(p)}
       >
         <span className={styles.dot} />
-        <span className={styles.label}>{p.type} {p.period}</span>
+        <span className={styles.label}>{p.label ?? `${p.type} ${p.period}`}</span>
         {isOn && (
           <span
             className={styles.removeBtn}
@@ -97,6 +109,11 @@ export default function IndicatorPanel({ indicators, onChange, sessionOverlays, 
       <div className={styles.section}>
         <div className={styles.sectionLabel}>Daily MAs (on any timeframe)</div>
         {DAILY_PRESETS.map(renderPreset)}
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionLabel}>Bands</div>
+        {BAND_PRESETS.map(renderPreset)}
       </div>
 
       <div className={styles.section}>

@@ -51,6 +51,18 @@ const TOOLS: Tool[] = [
     ),
   },
   {
+    type: 'callout',
+    label: 'Text',
+    title: 'Text bubble (click the spot to point at, or drag out to place the bubble)',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M2 2.5h10a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H6.5L3.5 12.5V9.5H2a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1z"
+          stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" fill="rgba(61,126,255,0.15)"/>
+        <path d="M3.5 5.2h7M3.5 7.2h4.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round"/>
+      </svg>
+    ),
+  },
+  {
     type: 'position',
     label: 'Pos',
     title: 'Position (click at entry; drag stop/target — target below entry = short)',
@@ -69,6 +81,8 @@ interface Props {
   onToolChange: (tool: DrawingToolType) => void;
   onClearDrawings: () => void;
   drawingCount: number;
+  canUndo: boolean;
+  onUndo: () => void;
 }
 
 export default function DrawingToolbar({
@@ -76,6 +90,8 @@ export default function DrawingToolbar({
   onToolChange,
   onClearDrawings,
   drawingCount,
+  canUndo,
+  onUndo,
 }: Props) {
   const handleToolClick = (type: DrawingToolType) => {
     // Toggle off if already active
@@ -96,6 +112,21 @@ export default function DrawingToolbar({
           {tool.icon}
         </button>
       ))}
+
+      <div className={styles.divider} />
+      <button
+        className={styles.btn}
+        onClick={onUndo}
+        disabled={!canUndo}
+        title={canUndo ? 'Undo last drawing change (Ctrl+Z)' : 'Nothing to undo'}
+      >
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M2.5 6.5h6a3 3 0 0 1 0 6H6" stroke="currentColor" strokeWidth="1.3"
+            strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M4.8 4.2 2.4 6.5l2.4 2.3" stroke="currentColor" strokeWidth="1.3"
+            strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      </button>
 
       {drawingCount > 0 && (
         <>

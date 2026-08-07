@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Bar, Tick, Timeframe } from '@ibkr-chart/types';
+import type { Bar, MatchedTrade, Tick, Timeframe } from '@ibkr-chart/types';
 import {
   loadLayout,
   saveLayout,
@@ -20,6 +20,7 @@ import {
   setQuotesConnected,
   applyLiveQuote,
 } from './lib/quoteStore';
+import { setActiveTrade, sessionEndFor, etDay } from './lib/journalStore';
 import ChartPanel from './components/Chart/ChartPanel';
 import ResizableGrid from './components/Grid/ResizableGrid';
 import LayoutPicker from './components/Grid/LayoutPicker';
@@ -148,6 +149,32 @@ export default function App() {
     handlePanelChange(id, { symbol, secType: 'STK', exchange: 'SMART', currency: 'USD', primaryExchange: undefined });
   }, [focusedPanelId, handlePanelChange]);
 
+  // Click a trade in the P&L journal → load its underlying's 1-minute chart for
+  // that session into the focused panel, with the trade's entry/exit legs
+  // marked. Past sessions load as fixed history (`sessionEnd`); today's stays
+  // live, since the live 1m window already covers it.
+  const handleOpenTradeOnChart = useCallback((trade: MatchedTrade) => {
+    const id = layoutRef.current.panels.some((p) => p.id === focusedPanelId)
+      ? focusedPanelId
+      : layoutRef.current.panels[0]?.id;
+    if (!id) return;
+
+    setActiveTrade(trade);
+    const isToday = trade.date === etDay();
+    handlePanelChange(id, {
+      symbol: trade.symbol,
+      secType: 'STK',
+      exchange: 'SMART',
+      currency: 'USD',
+      primaryExchange: undefined,
+      timeframe: '1m',
+      useRTH: 0,
+      sessionEnd: isToday ? undefined : sessionEndFor(trade.date),
+      sessionLabel: isToday ? undefined : trade.date,
+    });
+    setMaximizedPanelId(id); // give the review the whole grid
+  }, [focusedPanelId, handlePanelChange]);
+
   const handleColumnResize = useCallback((sizes: number[]) => {
     setLayout((l) => ({ ...l, columnSizes: sizes }));
   }, []);
@@ -200,7 +227,7 @@ export default function App() {
     },
     {
       id: 'pnl',
-      title: 'P&L calendar',
+      title: 'P&L calendar & trade journal',
       active: showPnl,
       onClick: () => setShowPnl((v) => !v),
       icon: (
@@ -358,7 +385,12 @@ export default function App() {
       {showSummary && <MarketSummary onClose={() => setShowSummary(false)} />}
 
       {/* ── P&L calendar window ─────────────────────────────────────── */}
-      {showPnl && <PnlCalendar onClose={() => setShowPnl(false)} />}
+      {showPnl && (
+        <PnlCalendar
+          onClose={() => setShowPnl(false)}
+          onOpenTradeOnChart={handleOpenTradeOnChart}
+        />
+      )}
 
       {/* ── Triggered-alert notifications (bottom right) ────────────── */}
       <AlertToasts />

@@ -71,17 +71,31 @@ type Interaction =
 
 function cursorForHandle(handle: ResizeHandle, type: Drawing['type']): string {
   if (type === 'trendline') return 'move';
+  if (type === 'callout') return 'move';
   if (type === 'position') return handle === 'right' ? 'ew-resize' : 'ns-resize';
   // Rectangle corners: diagonal resize cursors.
   if (handle === 'tl' || handle === 'br') return 'nwse-resize';
   return 'nesw-resize';
 }
 
-/** Move an entire drawing by a logical (time/price) delta. */
-function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
+/**
+ * Move a drawing by a logical (time/price) delta.
+ *
+ * Exported because it and `applyResize` are the pure core of every drag — what
+ * actually decides where a shape ends up — and they're worth checking without
+ * having to synthesise a pointer gesture.
+ */
+export function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
   if (d.type === 'hline') return { ...d, price: d.price + dPrice };
   // Dragging an alert to a new price re-arms it.
   if (d.type === 'alert') return { ...d, price: d.price + dPrice, triggeredAt: null };
+  if (d.type === 'callout') {
+    // The tail is PINNED to what it points at: dragging the bubble slides the
+    // text around while the tip stays on its candle, which is the whole point
+    // of a callout. The tip is still movable on its own — grab its handle
+    // (applyResize, handle 'anchor') to re-aim it.
+    return { ...d, bubble: { time: d.bubble.time + dTime, price: d.bubble.price + dPrice } };
+  }
   if (d.type === 'position') {
     return {
       ...d,
@@ -94,9 +108,13 @@ function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
 }
 
 /** Resize a drawing by dragging one handle to a new logical point. */
-function applyResize(d: Drawing, handle: ResizeHandle, logical: DrawingPoint): Drawing {
+export function applyResize(d: Drawing, handle: ResizeHandle, logical: DrawingPoint): Drawing {
   if (d.type === 'trendline') {
     return handle === 'p1' ? { ...d, p1: logical } : { ...d, p2: logical };
+  }
+  if (d.type === 'callout') {
+    // Either end moves independently: retarget the tip, or reposition the bubble.
+    return handle === 'anchor' ? { ...d, anchor: logical } : { ...d, bubble: logical };
   }
   if (d.type === 'position') {
     switch (handle) {
@@ -255,9 +273,33 @@ export default function DrawingCanvas({
       extendRight = (lastBarX != null && curPx.x >= lastBarX) || curPx.x >= edge - 2;
     }
 
-    const nd: Drawing = activeTool === 'trendline'
-      ? { id: newDrawingId(), type: 'trendline', p1, p2, color: DRAWING_COLORS.trendline, width: 1, extended: false, extendRight }
-      : { id: newDrawingId(), type: 'rectangle', p1, p2, borderColor: rectBorder, fillColor: rectFill, extendRight };
+    let nd: Drawing;
+    if (activeTool === 'callout') {
+      // A plain click (no drag) still needs somewhere to put the bubble: offset
+      // it up and to the left of the anchor, scaled to the chart's own bar
+      // spacing and volatility so it lands sensibly on a 1m or a daily.
+      let bubble = p2;
+      if (p2.time === p1.time && p2.price === p1.price) {
+        let barSec = 60;
+        let rise = p1.price * 0.004;
+        if (bars.length >= 2) {
+          barSec = Math.max(1, Number(bars[bars.length - 1].time) - Number(bars[bars.length - 2].time));
+          const recent = bars.slice(-20);
+          const avgRange = recent.reduce((a, b) => a + (Number(b.high) - Number(b.low)), 0) / recent.length;
+          if (avgRange > 0) rise = avgRange * 3;
+        }
+        bubble = { time: p1.time - barSec * 10, price: p1.price + rise };
+      }
+      nd = {
+        id: newDrawingId(), type: 'callout',
+        anchor: p1, bubble, text: '',
+        color: DRAWING_COLORS.callout, fillColor: DRAWING_COLORS.calloutFill, width: 1,
+      };
+    } else if (activeTool === 'trendline') {
+      nd = { id: newDrawingId(), type: 'trendline', p1, p2, color: DRAWING_COLORS.trendline, width: 1, extended: false, extendRight };
+    } else {
+      nd = { id: newDrawingId(), type: 'rectangle', p1, p2, borderColor: rectBorder, fillColor: rectFill, extendRight };
+    }
 
     onDrawingsChange([...drawingsRef.current, nd]);
     setFirstPoint(null);
@@ -265,7 +307,9 @@ export default function DrawingCanvas({
     createStartPx.current = null;
     onSelect?.(nd.id); // select the fresh shape so its handles show for tweaking
     onDrawingComplete?.();
-  }, [activeTool, rectColor, chart, dataTimeRange, width, onDrawingsChange, onDrawingComplete, onSelect]);
+    // A blank bubble is useless — go straight to the text field.
+    if (nd.type === 'callout') onOpenSettings?.(nd.id);
+  }, [activeTool, rectColor, chart, dataTimeRange, width, bars, onDrawingsChange, onDrawingComplete, onSelect, onOpenSettings]);
 
   // ─── Pointer handlers ───────────────────────────────────────────────────────
 
@@ -339,9 +383,12 @@ export default function DrawingCanvas({
       canvasRef.current?.setPointerCapture(e.pointerId);
       const rectBorder = rectColor?.border ?? DRAWING_COLORS.rectBorder;
       const rectFill = rectColor?.fill ?? DRAWING_COLORS.rectangle;
-      setInProgress(activeTool === 'trendline'
-        ? { id: '__ghost__', type: 'trendline', p1: logical, p2: logical, color: DRAWING_COLORS.trendline, width: 1, extended: false }
-        : { id: '__ghost__', type: 'rectangle', p1: logical, p2: logical, borderColor: rectBorder, fillColor: rectFill });
+      setInProgress(
+        activeTool === 'callout'
+          ? { id: '__ghost__', type: 'callout', anchor: logical, bubble: logical, text: '', color: DRAWING_COLORS.callout, fillColor: DRAWING_COLORS.calloutFill, width: 1 }
+          : activeTool === 'trendline'
+            ? { id: '__ghost__', type: 'trendline', p1: logical, p2: logical, color: DRAWING_COLORS.trendline, width: 1, extended: false }
+            : { id: '__ghost__', type: 'rectangle', p1: logical, p2: logical, borderColor: rectBorder, fillColor: rectFill });
     } else {
       // Second click (two-click fallback).
       commitCreate(firstPoint, logical, px);
@@ -367,7 +414,12 @@ export default function DrawingCanvas({
       if (!logical) return;
       if (chart && priceSeries) chart.setCrosshairPosition(logical.price, logical.time as Time, priceSeries);
       if (firstPoint && inProgress) {
-        setInProgress((prev) => (prev && prev.type !== 'hline' ? { ...prev, p2: logical } as Drawing : prev));
+        setInProgress((prev) => {
+          if (!prev) return prev;
+          // The callout's second point is its bubble, not a p2.
+          if (prev.type === 'callout') return { ...prev, bubble: logical };
+          return prev.type !== 'hline' ? { ...prev, p2: logical } as Drawing : prev;
+        });
       }
       return;
     }
@@ -398,6 +450,15 @@ export default function DrawingCanvas({
       const px = getPixel(e);
       const start = createStartPx.current;
       const moved = px && start ? Math.hypot(px.x - start.x, px.y - start.y) : 0;
+      // A callout always commits on release: a plain click drops it with a
+      // default bubble offset (see commitCreate) and opens the text field, so
+      // there's no half-placed state waiting on a second click.
+      if (activeTool === 'callout') {
+        const logical = moved > DRAG_THRESHOLD ? getLogical(e) : firstPoint;
+        canvasRef.current?.releasePointerCapture(e.pointerId);
+        if (logical) commitCreate(firstPoint, logical, px);
+        return;
+      }
       if (moved > DRAG_THRESHOLD) {
         const logical = getLogical(e);
         if (logical) commitCreate(firstPoint, logical, px);

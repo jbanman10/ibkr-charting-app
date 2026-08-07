@@ -19,7 +19,7 @@ import type { Time } from 'lightweight-charts';
 
 // ─── Serialisable drawing types ───────────────────────────────────────────────
 
-export type DrawingToolType = 'trendline' | 'hline' | 'rectangle' | 'position' | 'none';
+export type DrawingToolType = 'trendline' | 'hline' | 'rectangle' | 'position' | 'callout' | 'none';
 
 export interface DrawingPoint {
   time: number;   // Unix seconds
@@ -84,7 +84,28 @@ export interface AlertDrawing {
   triggeredAt?: number | null; // unix ms when it fired; null/absent = armed
 }
 
-export type Drawing = TrendLineDrawing | HLineDrawing | RectangleDrawing | PositionDrawing | AlertDrawing;
+// TradingView-style callout: a rounded text bubble with a tail pointing at a
+// spot on the chart. `anchor` is what it points AT; `bubble` is where the box
+// sits. Both are logical points, so the callout tracks the candle it marks
+// across pan/zoom and every timeframe.
+export interface CalloutDrawing {
+  id: string;
+  type: 'callout';
+  anchor: DrawingPoint;
+  bubble: DrawingPoint;
+  text: string;
+  color: string;      // border + text
+  fillColor: string;  // bubble background
+  width?: number;     // border width, default 1
+}
+
+export type Drawing =
+  | TrendLineDrawing
+  | HLineDrawing
+  | RectangleDrawing
+  | PositionDrawing
+  | AlertDrawing
+  | CalloutDrawing;
 
 // ─── Coordinate helpers ───────────────────────────────────────────────────────
 
@@ -225,6 +246,73 @@ export function fromPixel(
   return { time: time as number, price };
 }
 
+// ─── Callout geometry ─────────────────────────────────────────────────────────
+//
+// Rendering and hit-testing must agree on exactly where the bubble sits, so both
+// go through these helpers. Text is measured on a shared offscreen 2D context
+// (hit-testing has no canvas of its own).
+
+const CALLOUT_FONT = '12px JetBrains Mono, monospace';
+const CALLOUT_PAD_X = 8;
+const CALLOUT_PAD_Y = 6;
+const CALLOUT_LINE_H = 15;
+const CALLOUT_TAIL_HALF = 6; // half-width of the tail's base
+const CALLOUT_MAX_LINES = 8;
+export const CALLOUT_PLACEHOLDER = 'Text…';
+
+let measureCtx: CanvasRenderingContext2D | null | undefined;
+
+function getMeasureCtx(): CanvasRenderingContext2D | null {
+  if (measureCtx === undefined) {
+    try {
+      measureCtx = document.createElement('canvas').getContext('2d');
+    } catch {
+      measureCtx = null;
+    }
+  }
+  return measureCtx ?? null;
+}
+
+/** The lines actually drawn — empty text shows a placeholder so a fresh
+ *  callout is visible (and clickable) before anything is typed. */
+export function calloutLines(d: CalloutDrawing): string[] {
+  const raw = (d.text ?? '').replace(/\r/g, '');
+  if (!raw.trim()) return [CALLOUT_PLACEHOLDER];
+  return raw.split('\n').slice(0, CALLOUT_MAX_LINES);
+}
+
+export interface CalloutBox { x: number; y: number; w: number; h: number }
+
+/** Bubble rect in pixels, centred on the bubble point. */
+export function calloutBox(d: CalloutDrawing, bubblePx: PixelPoint): CalloutBox {
+  const lines = calloutLines(d);
+  const ctx = getMeasureCtx();
+  let textW = 0;
+  if (ctx) {
+    ctx.font = CALLOUT_FONT;
+    for (const l of lines) textW = Math.max(textW, ctx.measureText(l).width);
+  } else {
+    // No canvas (SSR/test): approximate at the monospace advance width.
+    for (const l of lines) textW = Math.max(textW, l.length * 7.2);
+  }
+  const w = Math.ceil(textW) + CALLOUT_PAD_X * 2;
+  const h = lines.length * CALLOUT_LINE_H + CALLOUT_PAD_Y * 2;
+  return { x: bubblePx.x - w / 2, y: bubblePx.y - h / 2, w, h };
+}
+
+/** Where the tail leaves the bubble: the box boundary along the ray toward `target`. */
+function boxEdgeToward(box: CalloutBox, target: PixelPoint): PixelPoint {
+  const cx = box.x + box.w / 2;
+  const cy = box.y + box.h / 2;
+  const dx = target.x - cx;
+  const dy = target.y - cy;
+  if (dx === 0 && dy === 0) return { x: cx, y: cy };
+  const sx = dx !== 0 ? (box.w / 2) / Math.abs(dx) : Infinity;
+  const sy = dy !== 0 ? (box.h / 2) / Math.abs(dy) : Infinity;
+  const s = Math.min(sx, sy);
+  return { x: cx + dx * s, y: cy + dy * s };
+}
+
 // ─── Hit testing ──────────────────────────────────────────────────────────────
 
 const HIT_RADIUS = 8; // px tolerance for clicking on a drawing
@@ -241,6 +329,20 @@ export function hitTestDrawing(
     const y = series.priceToCoordinate(drawing.price);
     if (y === null) return false;
     return Math.abs(px.y - y) < HIT_RADIUS;
+  }
+
+  if (drawing.type === 'callout') {
+    const edge = plotRight(chart, width);
+    const bub = toPixel(chart, drawing.bubble, series, range, edge);
+    const anchor = toPixel(chart, drawing.anchor, series, range, edge);
+    if (!bub) return false;
+    const box = calloutBox(drawing, bub);
+    const inBox = px.x >= box.x - HIT_RADIUS && px.x <= box.x + box.w + HIT_RADIUS
+               && px.y >= box.y - HIT_RADIUS && px.y <= box.y + box.h + HIT_RADIUS;
+    if (inBox) return true;
+    // The tail counts too, so the pointer end is grabbable.
+    if (!anchor) return false;
+    return distToSegment(px, boxEdgeToward(box, anchor), anchor) < HIT_RADIUS;
   }
 
   if (drawing.type === 'position') {
@@ -284,7 +386,10 @@ export function hitTestDrawing(
 // Which grab point a resize drag is manipulating. Trendlines expose their two
 // endpoints; rectangles expose their four visual corners; positions expose
 // their three price lines plus a right-edge width handle.
-export type ResizeHandle = 'p1' | 'p2' | 'tl' | 'tr' | 'bl' | 'br' | 'entry' | 'stop' | 'target' | 'right';
+export type ResizeHandle =
+  | 'p1' | 'p2' | 'tl' | 'tr' | 'bl' | 'br'
+  | 'entry' | 'stop' | 'target' | 'right'
+  | 'anchor' | 'bubble';
 
 const HANDLE_HIT = 9; // px tolerance for grabbing a resize handle
 
@@ -323,6 +428,18 @@ export function hitResizeHandle(
     if (near(xR, yT)) return 'tr';
     if (near(xL, yB)) return 'bl';
     if (near(xR, yB)) return 'br';
+    return null;
+  }
+
+  if (drawing.type === 'callout') {
+    const bub = toPixel(chart, drawing.bubble, series, range, edge);
+    const anchor = toPixel(chart, drawing.anchor, series, range, edge);
+    // Tip first: it sits outside the box, so it can never be shadowed by it.
+    if (anchor && near(anchor.x, anchor.y)) return 'anchor';
+    if (bub) {
+      const box = calloutBox(drawing, bub);
+      if (near(box.x, box.y)) return 'bubble';
+    }
     return null;
   }
 
@@ -394,6 +511,8 @@ export function renderDrawings(
       renderPosition(ctx, d, chart, series, isSelected, rightEdge, range);
     } else if (d.type === 'alert') {
       renderAlert(ctx, d, series, rightEdge, isSelected);
+    } else if (d.type === 'callout') {
+      renderCallout(ctx, d, chart, series, isSelected, rightEdge, range);
     }
 
     ctx.restore();
@@ -564,6 +683,82 @@ function renderAlert(
   if (selected) drawHandle(ctx, width / 2, y, color);
 }
 
+function renderCallout(
+  ctx: CanvasRenderingContext2D,
+  d: CalloutDrawing,
+  chart: IChartApi,
+  series: { priceToCoordinate: (p: number) => number | null },
+  selected: boolean,
+  width: number,
+  range: DataTimeRange | null
+): void {
+  const bub = toPixel(chart, d.bubble, series, range, width);
+  const anchor = toPixel(chart, d.anchor, series, range, width);
+  if (!bub || !anchor) return;
+
+  const box = calloutBox(d, bub);
+  const bw = d.width ?? 1;
+  const lines = calloutLines(d);
+  const isPlaceholder = !(d.text ?? '').trim();
+
+  // ─ Tail first, so the bubble paints over its base ─
+  const edge = boxEdgeToward(box, anchor);
+  const dx = anchor.x - edge.x;
+  const dy = anchor.y - edge.y;
+  const len = Math.hypot(dx, dy);
+  if (len > 1) {
+    const ux = dx / len;
+    const uy = dy / len;
+    // Perpendicular, so the base straddles the exit point along the box edge.
+    const px = -uy * CALLOUT_TAIL_HALF;
+    const py = ux * CALLOUT_TAIL_HALF;
+    ctx.beginPath();
+    ctx.moveTo(edge.x + px, edge.y + py);
+    ctx.lineTo(anchor.x, anchor.y);
+    ctx.lineTo(edge.x - px, edge.y - py);
+    ctx.closePath();
+    ctx.fillStyle = d.fillColor;
+    ctx.fill();
+    ctx.strokeStyle = d.color;
+    ctx.lineWidth = bw;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  // ─ Bubble ─
+  const r = 6;
+  ctx.beginPath();
+  ctx.moveTo(box.x + r, box.y);
+  ctx.arcTo(box.x + box.w, box.y, box.x + box.w, box.y + box.h, r);
+  ctx.arcTo(box.x + box.w, box.y + box.h, box.x, box.y + box.h, r);
+  ctx.arcTo(box.x, box.y + box.h, box.x, box.y, r);
+  ctx.arcTo(box.x, box.y, box.x + box.w, box.y, r);
+  ctx.closePath();
+  ctx.fillStyle = d.fillColor;
+  ctx.fill();
+  ctx.strokeStyle = selected ? '#ffffff' : d.color;
+  ctx.lineWidth = selected ? bw + 1 : bw;
+  ctx.stroke();
+
+  // ─ Text ─
+  ctx.font = CALLOUT_FONT;
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = isPlaceholder ? 'rgba(255,255,255,0.45)' : d.color;
+  lines.forEach((line, i) => {
+    ctx.fillText(
+      line,
+      box.x + CALLOUT_PAD_X,
+      box.y + CALLOUT_PAD_Y + CALLOUT_LINE_H * i + CALLOUT_LINE_H / 2
+    );
+  });
+
+  if (selected) {
+    drawHandle(ctx, anchor.x, anchor.y, d.color);
+    drawHandle(ctx, box.x, box.y, d.color);
+  }
+}
+
 const POS_GREEN = '#089981';
 const POS_RED   = '#f23645';
 const POS_GRAY  = '#b2b5be';
@@ -701,4 +896,6 @@ export const DRAWING_COLORS = {
   rectBorder: '#3d7eff',
   handle:     '#ffffff',
   handleBg:   '#3d7eff',
+  callout:      '#3d7eff',
+  calloutFill:  'rgba(19,23,34,0.92)', // near-opaque so text stays readable
 } as const;

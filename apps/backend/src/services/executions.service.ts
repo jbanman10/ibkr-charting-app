@@ -19,6 +19,7 @@ import type { Logger } from 'pino';
 import type { TradeExecution } from '@ibkr-chart/types';
 import { IBKRService } from './ibkr.service.js';
 import { config } from '../config.js';
+import { etWallClockToUnix } from '../lib/etTime.js';
 
 const POLL_MS = 10_000;
 // Fills feed both the chart arrows (recent) and the P&L calendar's CURRENT day
@@ -166,14 +167,45 @@ export class ExecutionsService {
     return out;
   }
 
-  /** "yyyymmdd  hh:mm:ss" (TWS operator timezone = this machine) → unix seconds. */
+  /**
+   * "yyyymmdd  hh:mm:ss [timezone]" → unix seconds.
+   *
+   * Newer TWS builds append the zone ("20260724 09:30:00 US/Eastern"); when it
+   * is present we honour it. Otherwise the wall clock is resolved against
+   * EXCHANGE time, not the server's timezone — the old machine-local reading
+   * was only correct while this machine sat in ET, and silently shifted every
+   * fill (and could misattribute one across midnight) anywhere else.
+   */
   private parseExecTime(raw?: string): number | null {
     if (!raw) return null;
-    const m = raw.trim().match(/^(\d{4})(\d{2})(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+    const m = raw.trim().match(/^(\d{4})(\d{2})(\d{2})\s+(\d{2}):(\d{2}):(\d{2})\s*(\S+)?/);
     if (!m) return null;
-    const [, y, mo, d, h, mi, s] = m;
-    const ms = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s)).getTime();
-    return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
+    const [, y, mo, d, h, mi, s, zone] = m;
+    const parts = [y, mo, d, h, mi, s].map(Number);
+
+    if (zone) {
+      try {
+        // Resolve the stated zone by formatting a probe instant in it.
+        const naive = Date.UTC(parts[0], parts[1] - 1, parts[2], parts[3], parts[4], parts[5]) / 1000;
+        const fmt = new Intl.DateTimeFormat('en-US', {
+          timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+        });
+        const read = (t: number) => {
+          const o: Record<string, number> = {};
+          for (const p of fmt.formatToParts(new Date(t * 1000))) {
+            if (p.type !== 'literal') o[p.type] = Number(p.value);
+          }
+          return Date.UTC(o.year, o.month - 1, o.day, o.hour % 24, o.minute, o.second) / 1000;
+        };
+        let guess = naive + (naive - read(naive));
+        guess = naive + (guess - read(guess));
+        return Math.floor(guess);
+      } catch { /* unknown zone name — fall through to exchange time */ }
+    }
+
+    const t = etWallClockToUnix(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]);
+    return Number.isFinite(t) ? Math.floor(t) : null;
   }
 
   private prune(): void {

@@ -162,6 +162,12 @@ export interface PanelConfig {
   sessionOverlays: SessionOverlays;
   // Keyed by level ('PDH', 'PML', …); absent = theme defaults.
   sessionLevelStyles?: Record<string, SessionLevelStyle>;
+  // Trade-journal review mode: unix seconds to load history UP TO, instead of
+  // the live window. Set when a journal trade is opened so a session months in
+  // the past can be inspected; the panel stops streaming while it's set.
+  sessionEnd?: number;
+  // ET date being reviewed ('YYYY-MM-DD'), for the review banner.
+  sessionLabel?: string;
 }
 
 // ─── Layout config ────────────────────────────────────────────────────────────

@@ -61,6 +61,36 @@
 .actionActive    { background: var(--accent-glow); color: var(--accent); }
 .closeBtn:hover  { background: var(--candle-down-dim); color: var(--candle-down); }
 
+/* Journal review mode — the panel is showing a fixed past session, not live. */
+.reviewChip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 152, 0, 0.5);
+  border-radius: 5px;
+  background: rgba(255, 152, 0, 0.14);
+  color: #ff9800;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s;
+}
+.reviewChip:hover { background: rgba(255, 152, 0, 0.25); }
+
+.reviewDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff9800;
+}
+
+.reviewClose { opacity: 0.7; font-size: 9px; }
+
 /* ─── Chart area — must fill remaining height ──────────────────────────── */
 
 .chartArea {

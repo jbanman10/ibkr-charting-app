@@ -1,19 +1,29 @@
 /**
- * PnlCalendar — a TradeZella-style monthly P&L calendar.
+ * PnlCalendar — a TradeZella-style monthly P&L calendar and trade journal.
  *
  * Month grid of trading days coloured by realized P&L (net of commissions),
  * with per-day trade count and win rate, weekly totals down the right, and a
- * month stats header. History comes from IBKR's Flex Web Service; the current
- * day comes from locally collected fills (see /api/pnl/calendar).
+ * month stats header. Clicking a day drills into its matched round-trips; a
+ * second tab holds the analytics.
+ *
+ * Days come from /api/trades/summary, which is built from FIFO-matched trades
+ * (lib/tradeMatcher on the backend) rather than raw fills — history from IBKR's
+ * Flex statement, the current session from locally collected executions.
  */
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import type { DailyPnl, PnlCalendarResponse } from '@ibkr-chart/types';
+import type { MatchedTrade, TradeDaySummary, TradesSummaryResponse } from '@ibkr-chart/types';
+import DayTrades from './DayTrades';
+import TradeStats from './TradeStats';
 import styles from './PnlCalendar.module.css';
 
 interface Props {
   onClose: () => void;
+  /** Load this trade's session onto the focused 1-minute chart. */
+  onOpenTradeOnChart: (trade: MatchedTrade) => void;
 }
+
+type Tab = 'calendar' | 'stats';
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -28,11 +38,13 @@ const compact = (n: number) =>
 const dateKey = (y: number, m: number, d: number) =>
   `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 
-export default function PnlCalendar({ onClose }: Props) {
+export default function PnlCalendar({ onClose, onOpenTradeOnChart }: Props) {
   const now = new Date();
+  const [tab, setTab] = useState<Tab>('calendar');
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
-  const [data, setData] = useState<PnlCalendarResponse | null>(null);
+  const [data, setData] = useState<TradesSummaryResponse | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -43,9 +55,9 @@ export default function PnlCalendar({ onClose }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/pnl/calendar');
+      const res = await fetch('/api/trades/summary');
       if (!res.ok) { setError(`Failed to load (${res.status})`); return; }
-      const body = (await res.json()) as PnlCalendarResponse;
+      const body = (await res.json()) as TradesSummaryResponse;
       setData(body);
       setError(null);
       if (!body.flexConfigured) setShowSetup(true);
@@ -102,10 +114,17 @@ export default function PnlCalendar({ onClose }: Props) {
   }, [token, queryId, load]);
 
   const byDate = useMemo(() => {
-    const m = new Map<string, DailyPnl>();
+    const m = new Map<string, TradeDaySummary>();
     for (const d of data?.days ?? []) m.set(d.date, d);
     return m;
   }, [data]);
+
+  // The stats tab covers the displayed month, so switching months re-scopes it.
+  const monthRange = useMemo(() => {
+    const mm = String(month + 1).padStart(2, '0');
+    const last = new Date(year, month + 1, 0).getDate();
+    return { from: `${year}-${mm}-01`, to: `${year}-${mm}-${String(last).padStart(2, '0')}` };
+  }, [year, month]);
 
   // Weeks of the displayed month, padded to whole Sun–Sat rows.
   const weeks = useMemo(() => {
@@ -144,7 +163,14 @@ export default function PnlCalendar({ onClose }: Props) {
     const d = new Date(year, month + delta, 1);
     setYear(d.getFullYear());
     setMonth(d.getMonth());
+    setSelectedDate(null); // the open drill-down belongs to the month we left
   };
+
+  // Picking a trade hands it to the chart and gets the modal out of the way.
+  const openTrade = useCallback((trade: MatchedTrade) => {
+    onOpenTradeOnChart(trade);
+    onClose();
+  }, [onOpenTradeOnChart, onClose]);
 
   // Colour intensity scales with the day's size relative to the month's best.
   const maxAbs = useMemo(() => {
@@ -194,6 +220,22 @@ export default function PnlCalendar({ onClose }: Props) {
           </div>
         </div>
 
+        {/* ── Tabs ───────────────────────────────────────────────── */}
+        <div className={styles.tabs}>
+          <button
+            className={`${styles.tab} ${tab === 'calendar' ? styles.tabActive : ''}`}
+            onClick={() => setTab('calendar')}
+          >
+            Calendar
+          </button>
+          <button
+            className={`${styles.tab} ${tab === 'stats' ? styles.tabActive : ''}`}
+            onClick={() => setTab('stats')}
+          >
+            Stats
+          </button>
+        </div>
+
         {error && <div className={styles.errorBar}>⚠ {error}</div>}
 
         {/* ── Flex setup ─────────────────────────────────────────── */}
@@ -231,6 +273,9 @@ export default function PnlCalendar({ onClose }: Props) {
           </div>
         )}
 
+        {tab === 'stats' && <TradeStats from={monthRange.from} to={monthRange.to} />}
+
+        {tab === 'calendar' && <>
         {/* ── Month stats ────────────────────────────────────────── */}
         <div className={styles.stats}>
           <Stat label="Net P&L" value={money(stats.pnl)} tone={stats.pnl > 0 ? 'up' : stats.pnl < 0 ? 'down' : undefined} big />
@@ -250,7 +295,7 @@ export default function PnlCalendar({ onClose }: Props) {
           {weeks.map((row, ri) => {
             const rowDays = row
               .map((c) => (c.key ? byDate.get(c.key) : undefined))
-              .filter((d): d is DailyPnl => !!d);
+              .filter((d): d is TradeDaySummary => !!d);
             const weekPnl = rowDays.reduce((a, d) => a + d.pnl, 0);
             const weekTrades = rowDays.reduce((a, d) => a + d.trades, 0);
             return (
@@ -272,7 +317,10 @@ export default function PnlCalendar({ onClose }: Props) {
                   return (
                     <div
                       key={ci}
-                      className={`${styles.cell} ${styles.cellActive} ${isToday ? styles.today : ''}`}
+                      className={`${styles.cell} ${styles.cellActive} ${isToday ? styles.today : ''} ${
+                        selectedDate === d.date ? styles.cellSelected : ''
+                      }`}
+                      onClick={() => setSelectedDate((cur) => (cur === d.date ? null : d.date))}
                       style={{
                         background: up
                           ? `rgba(8,153,129,${intensity})`
@@ -302,12 +350,29 @@ export default function PnlCalendar({ onClose }: Props) {
           })}
         </div>
 
+        {selectedDate && (
+          <DayTrades
+            date={selectedDate}
+            onOpenChart={openTrade}
+            onClose={() => setSelectedDate(null)}
+          />
+        )}
+
         {loading && <div className={styles.loading}>Loading…</div>}
         {!loading && !data?.flexConfigured && !showSetup && (
           <div className={styles.hint}>
             Only today's trades are shown until you connect Flex — click the ⚙ to set it up.
           </div>
         )}
+        {!loading && data?.flexConfigured && !data.detailAvailable && (
+          <div className={styles.hint}>
+            Your Flex statement has no execution-level detail, so historical days show P&L
+            only and can't be drilled into. Add <b>Quantity</b>, <b>Trade Price</b>,
+            {' '}<b>Buy/Sell</b> and <b>Date/Time</b> to the Trades section of your Flex query,
+            then hit Sync.
+          </div>
+        )}
+        </>}
       </div>
     </div>
   );

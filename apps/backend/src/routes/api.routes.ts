@@ -62,6 +62,9 @@ const BarsQuerySchema = z.object({
   timeframe: z.enum(timeframeValues).default('1d'),
   useRTH:    z.coerce.number().int().min(0).max(1).default(0),
   primaryExchange: z.string().optional(),
+  // Unix seconds. Requests the window ENDING here instead of "now" — used by
+  // the trade journal to load a past session's intraday chart.
+  end:       z.coerce.number().int().positive().optional(),
 });
 
 const SearchQuerySchema = z.object({
@@ -86,7 +89,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Invalid query', details: parsed.error.format() });
     }
 
-    const { symbol, secType, exchange, currency, timeframe, useRTH, primaryExchange } = parsed.data;
+    const { symbol, secType, exchange, currency, timeframe, useRTH, primaryExchange, end } = parsed.data;
 
     if (!ibkr.isConnected) {
       return reply.status(503).send({ error: 'IBKR not connected' });
@@ -94,8 +97,8 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const contract = MarketDataService.toIBContract(symbol, secType as SecType, exchange, currency, primaryExchange);
-      const bars = await marketData.fetchHistoricalBars(contract, timeframe, useRTH as 0 | 1);
-      app.log.info({ symbol, timeframe, useRTH, count: bars.length }, 'Bars served');
+      const bars = await marketData.fetchHistoricalBars(contract, timeframe, useRTH as 0 | 1, end);
+      app.log.info({ symbol, timeframe, useRTH, end, count: bars.length }, 'Bars served');
       return { symbol, timeframe, useRTH, bars };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
