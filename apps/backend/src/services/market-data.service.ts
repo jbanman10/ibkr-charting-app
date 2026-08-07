@@ -97,20 +97,27 @@ export class MarketDataService {
 
   // ─── One-shot historical (morning-summary quotes; not the chart) ─────────────
 
+  /**
+   * One-shot history. `endUnix` (unix seconds) requests the window ENDING at
+   * that instant instead of "now" — how the trade journal loads the 1m chart
+   * for a session months in the past. Omit it for the live window.
+   */
   fetchHistoricalBars(
     contract: IBContract,
     timeframe: Timeframe,
-    useRTH: 0 | 1 = 1
+    useRTH: 0 | 1 = 1,
+    endUnix?: number
   ): Promise<Bar[]> {
     if (timeframe === '1d' || timeframe === '1w') useRTH = 1;
     const tf = TIMEFRAMES[timeframe];
+    const end = endUnix != null ? MarketDataService.toIBEndDateTime(endUnix) : '';
     const result = this.histChain.then(async () => {
-      const bars = await this.runHistoricalRequest(contract, tf.barSize, tf.durationStr, useRTH);
+      const bars = await this.runHistoricalRequest(contract, tf.barSize, tf.durationStr, useRTH, WhatToShow.TRADES, end);
       // Extended-hours intraday: clamp stale away-from-market prints to the NBBO
       // (see sanitizeExtendedBars) so quote-derived values match TWS.
       if (timeframe !== '1d' && timeframe !== '1w' && useRTH === 0) {
         try {
-          const quotes = await this.runHistoricalRequest(contract, tf.barSize, tf.durationStr, 0, WhatToShow.BID_ASK);
+          const quotes = await this.runHistoricalRequest(contract, tf.barSize, tf.durationStr, 0, WhatToShow.BID_ASK, end);
           MarketDataService.sanitizeExtendedBars(bars, quotes);
         } catch { /* serve unfiltered on quote-fetch failure */ }
       }
@@ -237,12 +244,21 @@ export class MarketDataService {
     this.histChain = this.histChain.then(run, run).then(advance, advance);
   }
 
+  /** Unix seconds → IBKR's endDateTime format ("yyyymmdd-hh:mm:ss" in UTC). */
+  private static toIBEndDateTime(unixSec: number): string {
+    const d = new Date(unixSec * 1000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-` +
+           `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+  }
+
   private runHistoricalRequest(
     contract: IBContract,
     barSize: string,
     durationStr: string,
     useRTH: 0 | 1,
-    whatToShow: WhatToShow = WhatToShow.TRADES
+    whatToShow: WhatToShow = WhatToShow.TRADES,
+    endDateTime = ''
   ): Promise<Bar[]> {
     return new Promise((resolve, reject) => {
       if (!this.ibkr.isConnected) return reject(new Error('IBKR not connected'));
@@ -289,7 +305,7 @@ export class MarketDataService {
       this.ibkr.api.on(EventName.error, onError);
 
       this.ibkr.api.reqHistoricalData(
-        reqId, contract, '', durationStr, barSize as BarSizeSetting, whatToShow,
+        reqId, contract, endDateTime, durationStr, barSize as BarSizeSetting, whatToShow,
         useRTH, 2 /* epoch seconds */, false /* keepUpToDate */, []
       );
     });

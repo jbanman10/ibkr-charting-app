@@ -17,6 +17,7 @@ npm run dev                                    # backend + frontend together (co
 npm run dev --workspace=apps/backend           # backend only (tsx watch, port 3001)
 npm run dev --workspace=apps/frontend          # frontend only (Vite, port 5173)
 npm run build --workspace=packages/types       # build shared types (do this if you hit type-resolution errors)
+npm run test --workspace=apps/backend          # node:test via tsx — trade matcher + Flex parser
 ```
 
 Desktop app (Electron, `apps/desktop`):
@@ -30,7 +31,10 @@ npm run dist --workspace=apps/desktop           # build:icon + electron-builder 
 - **Backend requires `apps/backend/.env`** — `cp apps/backend/.env.example apps/backend/.env`.
   Key vars: `BACKEND_PORT` (default 3001), `IBKR_PORT` (7497 paper / 7496 live / 4002 / 4001),
   `IBKR_CLIENT_ID` (must be unique per running backend).
-- **No test or lint tooling is configured** — there are no test/lint scripts and no test files.
+- **Tests exist only for the backend's pure logic** (`apps/backend/src/lib/*.test.ts`, Node's
+  built-in runner via `tsx --test`; no framework dependency). Node 20's runner does **not**
+  discover `.ts` by directory or expand globs under cmd, so new test files must be added to the
+  `test` script's explicit path list. There is no lint tooling and no frontend test runner.
 - TWS or IB Gateway must be running with the API enabled before the backend can connect
   (see README "TWS / IB Gateway Setup"; TWS shows an "Accept incoming connection?" dialog
   on first connect).
@@ -63,6 +67,17 @@ Four workspaces:
     `SendRequest` → ReferenceCode → `GetStatement` (retries while IBKR generates it).
     `/api/pnl/calendar` merges Flex history with locally-collected fills for today (Flex wins per
     date); a "trade" is a round-trip grouped per (day, symbol).
+  - **Trade journal** — `lib/tradeMatcher.ts` is the core: a **pure**, unit-tested FIFO matcher
+    (no IBKR/Fastify/fs) that folds a fill stream into round-trips. Lots are consumed FIFO but a
+    *trade* is one **position episode** (flat → non-flat → flat), so scale-ins/scale-outs collapse
+    into one trade with quantity-weighted entry/exit while every fill survives on
+    `entryLegs`/`exitLegs` for charting; a fill carrying the position through flat is split into two
+    episodes. P&L uses IBKR's own realized figure when every closing fill reports one
+    (`pnlSource:'ibkr'`), else FIFO price math. `services/trades.service.ts` merges Flex history +
+    local executions into that stream (**Flex wins for every date it covers**, so a fill in both
+    isn't double-counted), then caches matched trades + day rollups to
+    `<DATA_DIR>/store/trade-aggregates.json` keyed by an input fingerprint. `routes/trades.routes.ts`
+    serves `/api/trades/summary|day/:date|stats`. Trades are booked on the ET date they **closed**.
   - `services/executions.service.ts` — polls `reqExecutions` every 10s (manual TWS fills don't
     push to non-zero client ids); normalizes fills to `TradeExecution` (options carry the
     UNDERLYING symbol), persists ~5 days to `<DATA_DIR>/store/executions.json`, broadcasts new
@@ -117,6 +132,21 @@ Four workspaces:
     events don't trigger).
   - `lib/drawings.ts` — drawing geometry/hit-testing + pixel↔time helpers (`timeToX`, `fromPixel`,
     `timeToUnix`, `plotRight`).
+  - **Callout (text bubble)** — `type:'callout'` holds TWO logical points: `anchor` (the spot the
+    tail points at) and `bubble` (where the box sits), so it tracks its candle across pan/zoom and
+    every timeframe. Box size comes from the text via `calloutBox()`, which measures on a shared
+    offscreen 2D context — **rendering and hit-testing both call it**, so they can't disagree.
+    Creating one commits on pointer-up (a plain click uses a default bubble offset scaled to bar
+    spacing + recent range) and immediately opens the settings card, whose textarea autofocuses.
+    **Dragging the body moves the bubble ONLY — the tail tip stays pinned** to what it points at
+    (that's the point of a callout); re-aim the tip by dragging its own handle.
+    Empty text renders a dim `Text…` placeholder so a fresh bubble is still visible and clickable.
+  - **Drawing undo (Ctrl+Z)** — `lib/drawingStore.ts` keeps a per-symbol stack of previous drawing
+    lists (in-memory, capped 60, not persisted). `setDrawings(symbol, next, { undoable: false })`
+    opts out — the alert-triggered write uses it, since that's not a user edit and would otherwise
+    bury real edits. `useSymbolDrawings` returns `[drawings, setDrawings, { undo, canUndo }]`;
+    ChartPanel binds Ctrl/⌘+Z on the focused panel (ignored while typing in an input/textarea) and
+    the toolbar's undo button disables itself when the stack is empty.
   - `lib/sessions.ts` + `lib/sessionShadingPrimitive.ts` — ET session math (opening range,
     prev-day H/L, pre-market H/L) and the pre/post-market background tint primitive.
   - `lib/chartTime.ts` — formats the time axis/crosshair in **Exchange time (America/New_York)**.
@@ -126,9 +156,20 @@ Four workspaces:
   - `components/SideRail/` — persistent right-edge tool rail (icon buttons via a `RailItem[]`);
     extend the `railItems` array in `App.tsx` as more quick tools land. Tools: watchlist,
     RVOL scanner (`components/Scanner/`, shares the drawer slot with the watchlist — opening one
-    closes the other), the P&L calendar (`components/PnlCalendar/` — a modal, not a drawer:
-    TradeZella-style month grid, weekly totals, month stats, and the Flex setup panel), and the
-    trade-arrows toggle (persisted as `ibkr_show_trades`).
+    closes the other), the P&L calendar / trade journal (`components/PnlCalendar/` — a modal, not a
+    drawer), and the trade-arrows toggle (persisted as `ibkr_show_trades`).
+  - **Trade journal UI** — `components/PnlCalendar/` has two tabs. The calendar colours each day by
+    net P&L (intensity scaled to the month's largest day) and **clicking a day opens `DayTrades`**,
+    the matched round-trips for it; clicking a trade calls `onOpenTradeOnChart`, which parks it in
+    `lib/journalStore.ts` and points the focused panel at the underlying's 1m chart for that
+    session. `TradeStats` is the second tab (win rate vs avg win/loss, P&L by weekday / ET hour /
+    symbol, day streaks), scoped to the displayed month.
+  - **Journal review mode:** `PanelConfig.sessionEnd` (unix seconds) makes a panel load fixed
+    history via `GET /api/bars?...&end=` instead of subscribing — `keepUpToDate` can only stream the
+    LIVE window, so a session months back is unreachable otherwise. While it's set the panel does
+    not stream and the ~60s re-sync is skipped; an orange "Reviewing &lt;date&gt;" chip in the toolbar
+    clears it. `lib/tradeMarkers.ts` maps the trade's legs to markers (snapped to real bar times,
+    blue entries / orange exits) and is kept pure so the mapping is checkable on its own.
   - Drawings carry an optional `label` (trendline / hline / rectangle), edited in the settings card
     and drawn by `drawLabelChip` as a chip at the drawing's right edge (hline: the price readout
     shifts left to make room).
@@ -144,7 +185,15 @@ Four workspaces:
   - Timeframe hotkey (in `ChartPanel`, `parseTimeframe`): on the focused chart, typing a digit opens
     a TradingView-style box (`1`→1m, `30`→30m, `1d`→daily, `60`/`1h`, `240`/`4h`, `1w`); Enter or a
     ~1.1s pause applies, Esc cancels. Guards the Delete/Backspace drawing handler while mid-entry.
-  - `lib/indicators.ts` — SMA/EMA computation.
+  - `lib/indicators.ts` — SMA/EMA/Bollinger computation. **Bollinger Bands are one
+    `IndicatorConfig` (`type:'BB'`, `stdDev`, `basisColor`) that expands into THREE line series**
+    keyed `BB-20:upper|:basis|:lower`; `baseIndicatorKey()` strips the `:suffix` so double-clicking
+    any edge opens the one config. The deviation is the **population** form (÷N, matching Pine's
+    `ta.stdev` default) — the sample form (÷N−1) would visibly widen every band vs TradingView.
+    Chart-source only: `computeDailyIndicators` filters BB out, since a stepped daily band
+    projected onto 1m isn't meaningful. The shaded channel between the edges is
+    `lib/bollingerFillPrimitive.ts` (v4 has no band series), paired up in `setIndicators` via each
+    series' `bandFill.group`.
 - `apps/desktop` — Electron shell. `main.js` spawns the esbuild-bundled backend (`backend.cjs`) via
   `ELECTRON_RUN_AS_NODE` with `SERVE_STATIC`/`FRONTEND_DIST` set, waits for `/api/status`, then loads
   the statically-served frontend. Ctrl+N opens a new window with its own `?win=` id (independent
@@ -167,6 +216,11 @@ doesn't crash the dev server.
 
 ## Critical gotchas
 
+- **Day bucketing is ET, via `apps/backend/src/lib/etTime.ts` — never the server's timezone.**
+  IBKR reports execution times as a bare wall clock in the TWS operator's zone with no offset, and
+  Flex `dateTime` likewise. Both are resolved against `America/New_York` (DST-aware), so a 16:05
+  fill stays on its own trading day instead of rolling past UTC midnight. Reading them as
+  machine-local was only correct while this machine sat in ET.
 - **Bar time is numeric UTC epoch everywhere; daily/weekly render as business days.** The backend
   emits all bar times as numeric unix seconds (`formatDate=2`). The frontend `toChartTime()`
   (`ChartContainer.tsx`) and `lib/indicators.ts` convert numbers to `"YYYY-MM-DD"` for daily/weekly.

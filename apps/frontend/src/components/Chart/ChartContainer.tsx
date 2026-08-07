@@ -27,6 +27,7 @@ import type { SessionRegion } from '../../lib/sessions';
 import { SessionShadingPrimitive } from '../../lib/sessionShadingPrimitive';
 import { DrawingsPrimitive } from '../../lib/drawingsPrimitive';
 import { EarningsPrimitive, type EarningsMark, type EarningsMarkDetail } from '../../lib/earningsPrimitive';
+import { BollingerFillPrimitive, type BollingerBandFill } from '../../lib/bollingerFillPrimitive';
 import { etTickMarkFormatter, etCrosshairFormatter } from '../../lib/chartTime';
 import { indicatorColors } from '../../lib/chartTheme';
 import DrawingCanvas, { type DrawingToolType } from './DrawingCanvas';
@@ -175,6 +176,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const shadingRef    = useRef<SessionShadingPrimitive | null>(null);
     const drawingsPrimRef = useRef<DrawingsPrimitive | null>(null);
     const earningsPrimRef = useRef<EarningsPrimitive | null>(null);
+    const bbFillPrimRef = useRef<BollingerFillPrimitive | null>(null);
     const barCountRef = useRef(0); // newest bar's logical index = barCount - 1
     const tfRef        = useRef(timeframe);
     // Newest bar time (unix seconds) currently on the chart. lightweight-charts'
@@ -268,6 +270,11 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       const earningsPrim = new EarningsPrimitive();
       candle.attachPrimitive(earningsPrim);
       earningsPrimRef.current = earningsPrim;
+
+      // Shaded channel between Bollinger band edges (behind the candles).
+      const bbFillPrim = new BollingerFillPrimitive();
+      candle.attachPrimitive(bbFillPrim);
+      bbFillPrimRef.current = bbFillPrim;
 
       // Crosshair tracking: the price under the cursor (for Alt+A price alerts)
       // and the hovered bar's volume (for the volume readout).
@@ -495,7 +502,11 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         if (!incoming.has(key)) { chart.removeSeries(line); existing.delete(key); }
       }
 
-      for (const { key, data, color, lineWidth, noAutoscale } of series) {
+      // Pair up Bollinger edges so the primitive can fill between them. Built
+      // from the same (deduped, sorted) points the lines get, below.
+      const bandParts = new Map<string, { upper?: LineData[]; lower?: LineData[]; color: string }>();
+
+      for (const { key, data, color, lineWidth, noAutoscale, bandFill } of series) {
         const opts = {
           color: color ?? indicatorColors[key] ?? '#8a95a8',
           lineWidth: Math.min(4, Math.max(1, lineWidth ?? 1)) as 1 | 2 | 3 | 4,
@@ -521,10 +532,23 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
             return ta - tz;
           });
           existing.get(key)!.setData(ordered);
+          if (bandFill) {
+            const part = bandParts.get(bandFill.group) ?? { color: bandFill.color };
+            part[bandFill.role] = ordered;
+            bandParts.set(bandFill.group, part);
+          }
         } catch (err) {
           console.error('[ChartContainer] indicator setData error:', key, err);
         }
       }
+
+      const bands: BollingerBandFill[] = [];
+      for (const [group, p] of bandParts) {
+        if (p.upper?.length && p.lower?.length) {
+          bands.push({ group, upper: p.upper, lower: p.lower, color: p.color });
+        }
+      }
+      bbFillPrimRef.current?.setBands(bands);
     }, []);
 
     // Session level horizontal lines (prev-day H/L, pre-market H/L, opening range).

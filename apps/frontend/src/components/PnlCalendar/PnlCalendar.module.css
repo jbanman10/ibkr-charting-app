@@ -273,3 +273,182 @@
   color: var(--text-secondary);
   text-align: center;
 }
+
+/* ─── Tabs ───────────────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.tab {
+  padding: 8px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.tab:hover { color: var(--text-primary); }
+
+.tabActive {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent, #2962ff);
+  font-weight: 600;
+}
+
+/* A calendar day with trades is clickable (drill-down). */
+.cellActive { cursor: pointer; transition: filter 0.12s; }
+.cellActive:hover { filter: brightness(1.35); }
+
+.cellSelected { box-shadow: inset 0 0 0 2px var(--text-primary); }
+
+/* ─── Day drill-down ─────────────────────────────────────────────────────── */
+
+.drill {
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-base);
+  flex-shrink: 0;
+}
+
+.drillHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.drillTitle {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.drillMeta {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.tradeTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.tradeTable th {
+  padding: 6px 10px;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tradeTable td {
+  padding: 7px 10px;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.tradeRow { cursor: pointer; transition: background 0.12s; }
+.tradeRow:hover { background: var(--bg-elevated); }
+
+.num { text-align: right; }
+
+.contractCell { font-weight: 600; }
+
+.subTime {
+  display: block;
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+
+.pnlCell { font-weight: 700; }
+
+.tag {
+  margin-left: 6px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+/* ─── Stats tab ──────────────────────────────────────────────────────────── */
+
+.statsTab { padding-bottom: 14px; }
+
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 0 24px;
+}
+
+.statSection { padding: 12px 14px 4px; }
+
+.statSectionTitle {
+  margin: 0 0 8px;
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: 46px 1fr 62px 76px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.barLabel {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.barTrack {
+  height: 12px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.barFill { height: 100%; border-radius: 3px; transition: width 0.2s; }
+
+.barValue {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.barMeta {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-secondary);
+  text-align: right;
+}

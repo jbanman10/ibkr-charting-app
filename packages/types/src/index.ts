@@ -93,6 +93,112 @@ export interface FlexConfig {
   queryId?: string;
 }
 
+// ─── Trade journal (matched round-trips) ─────────────────────────────────────
+
+/** One fill that contributed to a round-trip's entry or exit. */
+export interface TradeLeg {
+  time: number;      // unix seconds
+  price: number;
+  quantity: number;  // contracts/shares consumed by THIS trade (may be a
+                     // partial slice of a larger fill on a scale-out)
+}
+
+/**
+ * A completed round-trip: a position on one contract taken from flat back to
+ * flat. Scale-ins and scale-outs collapse into a single trade whose entry/exit
+ * prices are quantity-weighted averages; the individual fills survive in
+ * `entryLegs`/`exitLegs` for charting.
+ */
+export interface MatchedTrade {
+  id: string;
+  /** ET calendar date the trade was CLOSED (where its P&L is booked). */
+  date: string;              // YYYY-MM-DD
+  /** ET calendar date the position was opened (differs on overnight holds). */
+  openDate: string;
+  symbol: string;            // underlying for options
+  secType: string;
+  direction: 'long' | 'short';
+  quantity: number;          // contracts/shares round-tripped
+  multiplier: number;        // 100 for options, 1 for stock
+  entryTime: number;         // unix seconds, first entry fill
+  exitTime: number;          // unix seconds, last exit fill
+  entryPrice: number;        // quantity-weighted average
+  exitPrice: number;         // quantity-weighted average
+  grossPnl: number;
+  commission: number;
+  pnl: number;               // net of commission
+  /** 'ibkr' when taken from IBKR's own realized P&L, 'computed' when derived
+   * from our FIFO price math (IBKR's cost basis can predate our data). */
+  pnlSource: 'ibkr' | 'computed';
+  entryLegs: TradeLeg[];
+  exitLegs: TradeLeg[];
+  strike?: number;
+  right?: string;            // 'C' | 'P'
+  expiry?: string;           // yyyymmdd
+  source: 'flex' | 'local';
+}
+
+/** Per-day rollup of matched trades. */
+export interface TradeDaySummary {
+  date: string;              // YYYY-MM-DD (ET)
+  pnl: number;               // realized, net of commissions
+  grossPnl: number;
+  commissions: number;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;           // 0–100
+  volume: number;            // total contracts/shares round-tripped
+  grossWin: number;          // ≥ 0
+  grossLoss: number;         // ≤ 0
+  source: 'flex' | 'local';
+}
+
+export interface TradesSummaryResponse {
+  days: TradeDaySummary[];
+  from: string;
+  to: string;
+  /** Last successful Flex sync (unix ms), null if never. */
+  syncedAt: number | null;
+  flexConfigured: boolean;
+  /** True when the Flex statement lacks per-fill detail, so history is
+   * day-level only and those days cannot be drilled into. */
+  detailAvailable: boolean;
+}
+
+export interface TradesDayResponse {
+  date: string;
+  trades: MatchedTrade[];
+  summary: TradeDaySummary | null;
+}
+
+/** Aggregate analytics over a date range (the stats tab). */
+export interface TradeStatsResponse {
+  from: string;
+  to: string;
+  totals: {
+    pnl: number;
+    trades: number;
+    wins: number;
+    losses: number;
+    winRate: number | null;
+    avgWin: number | null;
+    avgLoss: number | null;
+    profitFactor: number | null;
+    expectancy: number | null;   // average P&L per trade
+    commissions: number;
+  };
+  /** Index 0 = Sunday … 6 = Saturday. */
+  byDayOfWeek: Array<{ day: number; pnl: number; trades: number; wins: number }>;
+  /** ET hour buckets (e.g. 9 = 09:00–09:59), keyed on the ENTRY time. */
+  byHour: Array<{ hour: number; pnl: number; trades: number; wins: number }>;
+  bySymbol: Array<{ symbol: string; pnl: number; trades: number; wins: number; volume: number }>;
+  maxConsecutiveLosingDays: number;
+  maxConsecutiveWinningDays: number;
+  bestDay: { date: string; pnl: number } | null;
+  worstDay: { date: string; pnl: number } | null;
+}
+
 // ─── Timeframe ───────────────────────────────────────────────────────────────
 
 export type Timeframe = '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
@@ -285,7 +391,7 @@ export interface EarningsInfo {
 
 // ─── Indicator types ─────────────────────────────────────────────────────────
 
-export type IndicatorType = 'SMA' | 'EMA';
+export type IndicatorType = 'SMA' | 'EMA' | 'BB';
 
 export interface IndicatorConfig {
   type: IndicatorType;
@@ -293,6 +399,10 @@ export interface IndicatorConfig {
   color: string;
   visible: boolean;
   lineWidth?: number; // 1–4, default 1
+  // Bollinger Bands only: standard-deviation multiplier (TradingView default 2)
+  // and the middle band's colour (`color` styles the upper/lower bands + fill).
+  stdDev?: number;
+  basisColor?: string;
   // 'daily' = computed on DAILY bars and projected onto the panel's timeframe
   // (a 200-day MA shown as a stepped level on the 1m/30m). Absent = 'chart'
   // (computed on the panel's own bars, the classic behavior).
