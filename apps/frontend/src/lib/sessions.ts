@@ -75,6 +75,20 @@ export function classify(minuteOfDay: number): SessionKind {
   return 'closed';
 }
 
+/**
+ * Which session the wall clock is in right now (ET). Weekends count as closed —
+ * a Saturday morning is inside the pre-market minute window but there is no
+ * session, and showing a stale "Pre" line all weekend would be wrong.
+ */
+export function currentSession(nowMs = Date.now()): SessionKind {
+  const { minuteOfDay } = etParts(Math.floor(nowMs / 1000));
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', weekday: 'short',
+  }).format(nowMs);
+  if (weekday === 'Sat' || weekday === 'Sun') return 'closed';
+  return classify(minuteOfDay);
+}
+
 const hi = (bars: Bar[]) => (bars.length ? Math.max(...bars.map((b) => Number(b.high))) : null);
 const lo = (bars: Bar[]) => (bars.length ? Math.min(...bars.map((b) => Number(b.low))) : null);
 

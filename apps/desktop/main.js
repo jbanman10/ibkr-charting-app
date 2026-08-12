@@ -130,7 +130,10 @@ function createWindow() {
     width: 1400,
     height: 900,
     backgroundColor: '#131722',
-    title: 'IBKR Chart',
+    // Display name only. The packaged productName stays "IBKR Chart" so the
+    // install directory, exe name and userData path (where drawings, executions
+    // and the Flex config live) are untouched by the rename.
+    title: 'Mallard',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,

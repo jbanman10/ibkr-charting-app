@@ -43,7 +43,9 @@ export interface FlexTrade {
   date: string;        // YYYY-MM-DD
   symbol: string;      // underlying where available
   assetCategory: string;
-  realizedPnl: number; // 0 on opening trades
+  /** fifoPnlRealized — 0 on opening trades, and **already net of commissions**
+   *  (matches the TWS API's realizedPNL exactly on every overlapping day). */
+  realizedPnl: number;
   commission: number;  // absolute cost (positive)
 
   id?: string;         // tradeID / transactionID — stable across syncs

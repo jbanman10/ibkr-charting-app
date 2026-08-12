@@ -17,6 +17,7 @@ const SESSION_TOGGLES: Array<{ key: keyof SessionOverlays; label: string; color:
   { key: 'prevDayHL',    label: 'Prev day H/L',       color: SESSION_COLORS.prevDayHigh },
   { key: 'premarketHL',  label: 'Pre-market H/L',     color: SESSION_COLORS.premarket },
   { key: 'shading',      label: 'Session shading',    color: SESSION_COLORS.premarket },
+  { key: 'extendedPrice', label: 'Pre/post price (daily)', color: SESSION_COLORS.preMarketPrice },
 ];
 
 type Preset = { type: IndicatorConfig['type']; period: number; source?: 'daily'; label?: string };
@@ -119,7 +120,9 @@ export default function IndicatorPanel({ indicators, onChange, sessionOverlays, 
       <div className={styles.section}>
         <div className={styles.sectionLabel}>Session levels</div>
         {SESSION_TOGGLES.map(({ key, label, color }) => {
-          const isOn = sessionOverlays[key];
+          // Absent means ON: overlays added after a layout was saved must not
+          // read as switched off just because the old panel never mentioned them.
+          const isOn = sessionOverlays[key] !== false;
           return (
             <button
               key={key}

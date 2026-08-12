@@ -27,6 +27,11 @@ import { etDay } from '../lib/etTime.js';
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), '.data');
 const CACHE_FILE = join(DATA_DIR, 'store', 'trade-aggregates.json');
 
+// Bump when the P&L maths changes, so a cache written by the old calculation is
+// recomputed instead of served — the inputs alone can't tell you the code moved.
+// 2 = IBKR's realized P&L recognised as already net of commissions.
+const CALC_VERSION = 2;
+
 interface Computed {
   fingerprint: string;
   trades: MatchedTrade[];
@@ -118,9 +123,12 @@ export class TradesService {
   /**
    * Merge the two fill sources into one stream.
    *
-   * Flex is authoritative for every date it covers, so local executions are
-   * dropped for those dates — otherwise a fill present in both would open and
-   * close twice. (A position opened on a Flex-covered day and closed on a
+   * Flex is authoritative for every date it can MATCH — i.e. where its rows
+   * carry execution-level detail — so local executions are dropped for those
+   * dates and a fill present in both can't open and close twice. Dates where
+   * Flex has only day-level rows fall back to the local executions, which is
+   * what keeps recent days in the journal while a statement lacks the detail
+   * columns. (A position opened on a Flex-covered day and closed on a
    * local-only day is the one case this can't stitch together; it shows up as
    * an unmatched open and is simply not reported, which beats double counting.)
    */
@@ -133,8 +141,12 @@ export class TradesService {
     let detailRows = 0;
 
     flexTrades.forEach((t, i) => {
-      flexDates.add(t.date);
+      // Only a date Flex can actually MATCH counts as covered. A statement
+      // without execution-level columns yields no fills, so claiming its dates
+      // would drop the local executions for them too and the day would vanish
+      // from the journal rather than falling back.
       if (!hasFlexDetail(t)) return;
+      flexDates.add(t.date);
       detailRows++;
       const secType = t.assetCategory || 'STK';
       fills.push({
@@ -190,7 +202,7 @@ export class TradesService {
     // Commission reports mutate fills in place without changing the count, so
     // fold their presence in too.
     const priced = execs.reduce((a, e) => a + (e.commission != null ? 1 : 0), 0);
-    return [flexTrades.length, syncedAt ?? 0, execs.length, newest, priced].join(':');
+    return [CALC_VERSION, flexTrades.length, syncedAt ?? 0, execs.length, newest, priced].join(':');
   }
 
   // ─── Cache file (same write-then-rename pattern as the other stores) ────────

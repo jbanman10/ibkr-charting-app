@@ -91,7 +91,9 @@ export async function registerPnlRoutes(app: FastifyInstance): Promise<void> {
     const flexDays = new Map<string, Bucket>();
     for (const t of trades) {
       const b = flexDays.get(t.date) ?? emptyBucket();
-      const net = t.realizedPnl - t.commission;
+      // Flex's fifoPnlRealized is ALREADY net of commissions (verified against
+      // the TWS API's own figures on every overlapping day) — don't deduct twice.
+      const net = t.realizedPnl;
       b.pnl += net;
       b.commissions += t.commission;
       if (t.realizedPnl !== 0) {
@@ -108,11 +110,12 @@ export async function registerPnlRoutes(app: FastifyInstance): Promise<void> {
         const date = etDay(e.time);
         const b = localDays.get(date) ?? emptyBucket();
         const commission = e.commission ?? 0;
+        // Same convention as Flex: commissionReport.realizedPNL is net already.
         const realized = e.realizedPnl ?? 0;
-        b.pnl += realized - commission;
+        b.pnl += realized;
         b.commissions += commission;
         if (realized !== 0) {
-          b.bySymbol.set(e.symbol, (b.bySymbol.get(e.symbol) ?? 0) + (realized - commission));
+          b.bySymbol.set(e.symbol, (b.bySymbol.get(e.symbol) ?? 0) + realized);
         }
         localDays.set(date, b);
       }

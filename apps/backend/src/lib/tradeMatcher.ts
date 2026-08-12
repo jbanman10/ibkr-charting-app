@@ -25,6 +25,10 @@
  * (`pnlSource: 'ibkr'`) — IBKR knows the true cost basis, which may predate the
  * fills we hold. Commission is pro-rated by the quantity consumed, so a
  * partially-consumed fill contributes only its matched share.
+ *
+ * **IBKR's realized figure is already net of commissions** (see finalizeEpisode),
+ * so `pnl` takes it as-is and derives `grossPnl` by adding the fees back. Only
+ * the computed path subtracts them.
  */
 
 import type { MatchedTrade, TradeDaySummary, TradeLeg } from '@ibkr-chart/types';
@@ -226,8 +230,17 @@ function finalizeEpisode(
   const exitPrice = ep.exitQty ? ep.exitNotional / ep.exitQty : 0;
 
   const useIbkr = ep.ibkrRealizedComplete && ep.ibkrRealized !== 0;
-  const grossPnl = useIbkr ? ep.ibkrRealized : ep.grossPnl;
   const commission = ep.commission;
+
+  // IBKR's realized P&L is already NET of commissions — both the TWS API's
+  // commissionReport and Flex's fifoPnlRealized. Verified against price math on
+  // real fills: NVDA 225C bought 1.53 / sold 1.71 is 18.00 gross, commissions
+  // 2.087413, and IBKR reports exactly 15.912587. Subtracting commissions from
+  // it again (as this did) understated every trade by its own fees.
+  //
+  // Our own FIFO figure, by contrast, is gross and does need them taken off.
+  const pnl = useIbkr ? ep.ibkrRealized : ep.grossPnl - commission;
+  const grossPnl = useIbkr ? ep.ibkrRealized + commission : ep.grossPnl;
 
   return {
     id: `${key}#${ep.seq}@${exitTime}`,
@@ -244,7 +257,7 @@ function finalizeEpisode(
     exitPrice: Math.round(exitPrice * 10_000) / 10_000,
     grossPnl: round2(grossPnl),
     commission: round2(commission),
-    pnl: round2(grossPnl - commission),
+    pnl: round2(pnl),
     pnlSource: useIbkr ? 'ibkr' : 'computed',
     entryLegs: ep.entryLegs,
     exitLegs: ep.exitLegs,

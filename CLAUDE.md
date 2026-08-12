@@ -73,10 +73,18 @@ Four workspaces:
     into one trade with quantity-weighted entry/exit while every fill survives on
     `entryLegs`/`exitLegs` for charting; a fill carrying the position through flat is split into two
     episodes. P&L uses IBKR's own realized figure when every closing fill reports one
-    (`pnlSource:'ibkr'`), else FIFO price math. `services/trades.service.ts` merges Flex history +
-    local executions into that stream (**Flex wins for every date it covers**, so a fill in both
-    isn't double-counted), then caches matched trades + day rollups to
-    `<DATA_DIR>/store/trade-aggregates.json` keyed by an input fingerprint. `routes/trades.routes.ts`
+    (`pnlSource:'ibkr'`), else FIFO price math. **IBKR's realized P&L is ALREADY NET of
+    commissions** — both `commissionReport.realizedPNL` and Flex's `fifoPnlRealized` (verified:
+    NVDA 225C bought 1.53 / sold 1.71 is 18.00 gross, fees 2.087413, IBKR reports 15.912587; and
+    Flex matches the TWS figures exactly on every overlapping day). So `pnl` takes it as-is and
+    derives `grossPnl` by adding fees back; only the computed path subtracts them. Deducting them
+    from IBKR's number understated every trade by its own fees. `services/trades.service.ts` merges Flex history +
+    local executions into that stream (**Flex wins for every date it can MATCH** — i.e. where its
+    rows carry execution-level detail — so a fill in both isn't double-counted, while a date whose
+    Flex rows are day-level only falls back to local fills instead of vanishing), then caches
+    matched trades + day rollups to `<DATA_DIR>/store/trade-aggregates.json` keyed by an input
+    fingerprint that includes a `CALC_VERSION` — bump it whenever the P&L maths changes or a stale
+    cache is served. `routes/trades.routes.ts`
     serves `/api/trades/summary|day/:date|stats`. Trades are booked on the ET date they **closed**.
   - `services/executions.service.ts` — polls `reqExecutions` every 10s (manual TWS fills don't
     push to non-zero client ids); normalizes fills to `TradeExecution` (options carry the
@@ -149,10 +157,33 @@ Four workspaces:
     the toolbar's undo button disables itself when the stack is empty.
   - `lib/sessions.ts` + `lib/sessionShadingPrimitive.ts` — ET session math (opening range,
     prev-day H/L, pre-market H/L) and the pre/post-market background tint primitive.
+    `currentSession()` reports the session the wall clock is in (weekends → `closed`).
+  - **Pre/post price on the daily chart** — a daily candle closes at the 16:00 RTH close, so
+    outside regular hours the live price is nowhere on a daily chart. `buildExtendedPriceLine`
+    (ChartPanel) emits it as a dotted price line via the existing `setSessionLevels` channel —
+    orange `Pre`, blue `Post`, nothing during RTH or when closed. Daily/weekly only; intraday
+    already plots extended-hours candles. **Ticks are dropped for daily bars** (they must not drag
+    an RTH candle) so `applyTick` captures `tick.last` into `extPriceRef` *before* that early
+    return, throttled to 400ms; a 30s interval also re-runs it because session boundaries pass on
+    the clock with no print. Toggled by `sessionOverlays.extendedPrice`, which is **optional and
+    treated as ON when absent** so panels saved before it existed don't read as switched off.
   - `lib/chartTime.ts` — formats the time axis/crosshair in **Exchange time (America/New_York)**.
   - `components/Grid/ResizableGrid.tsx` + `lib/layout.ts` — CSS-grid layout presets with draggable
     splitters; per-window layout is keyed `ibkr_chart_layout_v3:win<id>` (from a `?win=` param).
   - `components/MarketSummary/` — the "morning summary" popup (SPY/QQQ, econ calendar, news).
+  - **Theming** — `lib/theme.ts` + `lib/themeStore.ts`. A theme is the **same nine fields
+    chartthemes.com publishes, in that order** (bearish body/wick/border, bullish body/wick/border,
+    background, foreground, text) plus an optional `accent`, so a theme from that site transfers
+    field-for-field; `parseThemeColors()` pulls the nine colours out of pasted text in any shape.
+    Nine values can't name every surface, so `deriveCssVars()` **derives** panels/borders/secondary
+    text by mixing `background` toward `foreground` — which inverts automatically for a light
+    background. The UI recolours purely through the CSS custom properties it already used, so
+    components need no changes; **lightweight-charts can't read CSS vars**, so `ChartContainer`
+    subscribes via `subscribeTheme` and re-applies chart/candle options. Volume bars bake their
+    colour into each point, so `volDirRef` keeps each bar's direction for recolouring. Persisted
+    like drawings: localStorage warm cache + durable `/api/store/theme`. `initTheme()` runs in
+    `main.tsx` before render so a saved theme never flashes the default palette. Edited from the
+    rail's **Settings** modal (`components/Settings/`), which is sectioned for future settings.
   - `components/SideRail/` — persistent right-edge tool rail (icon buttons via a `RailItem[]`);
     extend the `railItems` array in `App.tsx` as more quick tools land. Tools: watchlist,
     RVOL scanner (`components/Scanner/`, shares the drawer slot with the watchlist — opening one

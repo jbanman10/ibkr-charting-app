@@ -172,7 +172,55 @@ test("IBKR's own realized P&L wins over price math when every exit reports it", 
     fill({ side: 'SLD', price: 1.5, quantity: 1, realizedPnl: 42.5 }),
   ]);
   assert.equal(trades[0].pnlSource, 'ibkr');
-  assert.equal(trades[0].grossPnl, 42.5, 'IBKR knows the true cost basis');
+  assert.equal(trades[0].pnl, 42.5, 'IBKR knows the true cost basis');
+});
+
+// Regression: IBKR's realized P&L is ALREADY net of commissions, so taking the
+// fees off it again understated every trade by its own fees. Numbers below are
+// real fills from the account.
+test("IBKR's realized P&L is net — commissions are not deducted twice", () => {
+  // NVDA 225C: BOT 1 @1.53 (comm 1.0333), SLD 1 @1.71 (comm 1.054113).
+  // Gross price math 18.00, fees 2.087413, and IBKR reports 15.912587.
+  const trades = matchTrades([
+    fill({ side: 'BOT', price: 1.53, quantity: 1, commission: 1.0333 }),
+    fill({ side: 'SLD', price: 1.71, quantity: 1, commission: 1.054113, realizedPnl: 15.912587 }),
+  ]);
+  assert.equal(trades.length, 1);
+  const t = trades[0];
+  assert.equal(t.pnlSource, 'ibkr');
+  assert.equal(t.pnl, 15.91, 'net P&L is IBKR\'s figure as-is');
+  assert.equal(t.commission, 2.09);
+  assert.equal(t.grossPnl, 18, 'gross adds the fees back, matching price math');
+  // The invariant that makes the two paths consistent.
+  assert.ok(Math.abs(t.grossPnl - t.commission - t.pnl) < 0.01, 'gross − fees === net');
+});
+
+test('the computed path still subtracts commissions (it is gross)', () => {
+  const trades = matchTrades([
+    fill({ side: 'BOT', price: 1.53, quantity: 1, commission: 1.0333 }),
+    fill({ side: 'SLD', price: 1.71, quantity: 1, commission: 1.054113 }), // no IBKR figure
+  ]);
+  const t = trades[0];
+  assert.equal(t.pnlSource, 'computed');
+  assert.equal(t.grossPnl, 18);
+  assert.equal(t.commission, 2.09);
+  assert.equal(t.pnl, 15.91, 'same answer as IBKR reaches, via price math');
+});
+
+test('a scaled trade reconciles to IBKR across multiple closing fills', () => {
+  // NVDA 200C: BOT 1 @1.13 (0.3473) + BOT 1 @1.13 (1.04028),
+  // SLD 1 @1.32 (1.475479, realized 16.830731), SLD 1 @1.20 (1.048062, realized 5.258148).
+  const trades = matchTrades([
+    fill({ side: 'BOT', price: 1.13, quantity: 1, commission: 0.3473 }),
+    fill({ side: 'BOT', price: 1.13, quantity: 1, commission: 1.04028 }),
+    fill({ side: 'SLD', price: 1.32, quantity: 1, commission: 1.475479, realizedPnl: 16.830731 }),
+    fill({ side: 'SLD', price: 1.20, quantity: 1, commission: 1.048062, realizedPnl: 5.258148 }),
+  ]);
+  assert.equal(trades.length, 1);
+  const t = trades[0];
+  assert.equal(t.pnl, 22.09, 'sum of IBKR realized, not reduced again');
+  assert.equal(t.commission, 3.91);
+  assert.equal(t.grossPnl, 26, '(1.32−1.13)×100 + (1.20−1.13)×100');
 });
 
 test('one exit missing realized P&L falls back to computed for the whole trade', () => {
@@ -183,6 +231,17 @@ test('one exit missing realized P&L falls back to computed for the whole trade',
   ]);
   assert.equal(trades[0].pnlSource, 'computed');
   assert.equal(trades[0].grossPnl, 100);
+});
+
+test('commission is pro-rated and only counted once on the computed path', () => {
+  const trades = matchTrades([
+    fill({ side: 'BOT', price: 1.0, quantity: 2, commission: 2.0 }),
+    fill({ side: 'SLD', price: 1.5, quantity: 2, commission: 2.0 }),
+  ]);
+  const t = trades[0];
+  assert.equal(t.grossPnl, 100);
+  assert.equal(t.commission, 4);
+  assert.equal(t.pnl, 96);
 });
 
 test('out-of-order fills are sorted before matching', () => {

@@ -61,7 +61,9 @@ export interface TradeExecution {
   // Filled in from IBKR's commissionReport (arrives just after the fill).
   // realizedPnl is only present on CLOSING fills.
   commission?: number;       // absolute cost of this fill
-  realizedPnl?: number;      // IBKR's own FIFO realized P&L, gross of commission
+  /** IBKR's own FIFO realized P&L. **Already NET of commissions** — both the
+   *  entry's and the exit's — so never subtract `commission` from it again. */
+  realizedPnl?: number;
 }
 
 // ─── P&L calendar ────────────────────────────────────────────────────────────

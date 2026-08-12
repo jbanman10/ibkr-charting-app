@@ -15,7 +15,7 @@ import type { EarningsMark, EarningsMarkDetail } from '../../lib/earningsPrimiti
 import type { EarningsInfo } from '@ibkr-chart/types';
 import type { SeriesMarker, Time } from 'lightweight-charts';
 import { computeIndicators, computeDailyIndicators, indicatorKey, baseIndicatorKey } from '../../lib/indicators';
-import { computeSessionLevels, computeSessionRegions } from '../../lib/sessions';
+import { computeSessionLevels, computeSessionRegions, currentSession } from '../../lib/sessions';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
 import type { SessionOverlays, SessionLevelStyle } from '../../lib/layout';
 import ChartContainer, { type ChartHandle, type SessionLevelLine } from './ChartContainer';
@@ -69,6 +69,9 @@ function parseTimeframe(raw: string): Timeframe | null {
   }
 }
 
+// How often the daily pre/post price line may be redrawn from ticks.
+const EXT_PRICE_MS = 400;
+
 // Default look + overlay group for each session level. Single source of truth
 // for both line building and the double-click settings card.
 const LEVEL_META: Record<string, {
@@ -116,6 +119,42 @@ function buildSessionLines(
   return out;
 }
 
+/**
+ * The live pre/post-market price, as a dotted line on the DAILY chart.
+ *
+ * A daily candle closes at the 16:00 RTH close, so outside regular hours the
+ * current price appears nowhere on a daily chart — you can't see that a stock
+ * is trading $3 higher after an earnings print. This adds it the way TradingView
+ * does: dotted line + an axis badge, orange in pre-market and blue in post.
+ *
+ * Intraday charts already plot extended-hours candles, so this is daily/weekly
+ * only. Nothing is drawn during regular hours (the last candle IS the price) or
+ * when the market is closed (a frozen line would read as live).
+ */
+export function buildExtendedPriceLine(
+  timeframe: Timeframe,
+  ov: SessionOverlays,
+  price: number | null
+): SessionLevelLine[] {
+  if (timeframe !== '1d' && timeframe !== '1w') return [];
+  if (ov.extendedPrice === false) return [];
+  if (price == null || !(price > 0)) return [];
+
+  const kind = currentSession();
+  if (kind !== 'pre' && kind !== 'post') return [];
+
+  return [{
+    // The key carries the session, so moving pre → post swaps the line rather
+    // than recolouring a stale one.
+    key: kind === 'pre' ? 'PREPX' : 'POSTPX',
+    price,
+    title: kind === 'pre' ? 'Pre' : 'Post',
+    color: kind === 'pre' ? SESSION_COLORS.preMarketPrice : SESSION_COLORS.postMarketPrice,
+    solid: false,
+    lineWidth: 1,
+  }];
+}
+
 interface Props {
   panel: PanelConfig;
   activeTool: DrawingToolType;
@@ -160,6 +199,10 @@ export default function ChartPanel({
   const rafRef = useRef<number | null>(null);           // coalesce tick repaints to 1/frame
   const lastFeedRef = useRef(0); // last authoritative snapshot/bar_update/bar_close (ms)
   const prevPriceRef = useRef<number | null>(null);     // previous live price, for alert crossing
+  // Live last price on a DAILY panel — the only way to know where price is
+  // outside regular hours, since a daily candle stops at the RTH close.
+  const extPriceRef = useRef<number | null>(null);
+  const extPriceAtRef = useRef(0);                      // last redraw (ms), for throttling
   const checkAlertsRef = useRef((_p: number) => {});    // assigned below (needs the drawings hook)
   const [showIndicators, setShowIndicators] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -194,7 +237,9 @@ export default function ChartPanel({
     const ov = panel.sessionOverlays;
     let bars = barsRef.current;
     if (!INTRADAY_TF.has(panel.timeframe) || !bars.length) {
-      handle.setSessionLevels([]);
+      // Daily/weekly: no session levels (they're intraday concepts), but the
+      // live extended-hours price still belongs here — see buildExtendedPriceLine.
+      handle.setSessionLevels(buildExtendedPriceLine(panel.timeframe, ov, extPriceRef.current));
       handle.setSessionRegions([]);
       return;
     }
@@ -237,6 +282,15 @@ export default function ChartPanel({
 
   // Re-apply overlays when toggles or timeframe change (bars already loaded).
   useEffect(() => { recomputeSessions(); }, [recomputeSessions]);
+
+  // Session boundaries move on the clock, not on ticks: 16:00 and 20:00 ET pass
+  // with no print at all on a quiet name. Without this the "Post" line would sit
+  // there all night looking live.
+  useEffect(() => {
+    if (panel.timeframe !== '1d' && panel.timeframe !== '1w') return;
+    const t = setInterval(() => recomputeSessions(), 30_000);
+    return () => clearInterval(t);
+  }, [panel.timeframe, recomputeSessions]);
 
   // Called by ChartContainer once its lightweight-charts instance is created.
   const handleChartReady = useCallback(() => {
@@ -285,6 +339,7 @@ export default function ChartPanel({
     barsRef.current = [];
     formingRef.current = null;
     prevPriceRef.current = null;
+    extPriceRef.current = null; // last price belongs to the OLD symbol
     dailyBarsRef.current = []; // the daily-bars effect refetches for the new symbol
     setBars([]);
 
@@ -392,7 +447,21 @@ export default function ChartPanel({
   const applyTick = useCallback((symbol: string, tick: Tick) => {
     if (symbol !== panel.symbol) return;
     // Daily/weekly are RTH-only; don't let pre/post ticks drag the day's bar.
-    if (panel.timeframe === '1d' || panel.timeframe === '1w') return;
+    if (panel.timeframe === '1d' || panel.timeframe === '1w') {
+      // The tick must NOT touch the bar (a daily candle is the RTH session), but
+      // it is the only source for the live pre/post-market price line. Throttled
+      // because setSessionLevels re-applies options on every call and ticks can
+      // arrive several times a second.
+      if (tick.last > 0) {
+        extPriceRef.current = tick.last;
+        const now = Date.now();
+        if (now - extPriceAtRef.current >= EXT_PRICE_MS) {
+          extPriceAtRef.current = now;
+          recomputeSessions();
+        }
+      }
+      return;
+    }
     const q = quoteRef.current;
     if (tick.last > 0) q.last = tick.last;
     if (tick.bid > 0) q.bid = tick.bid;
