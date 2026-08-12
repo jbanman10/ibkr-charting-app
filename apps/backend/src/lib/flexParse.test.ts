@@ -104,16 +104,19 @@ test('direction falls back to a signed quantity when buySell is absent', () => {
 });
 
 test('a detailed statement round-trips through the matcher', () => {
+  // Realistic figures: gross price math is (1.33−1.15)×100 + (1.23−1.15)×100 =
+  // 26.00, fees total 2.44, and Flex's fifoPnlRealized is NET — so the two
+  // exits report 16.78 and 6.78, summing to 23.56.
   const rows = FlexService.parseTrades(wrap(`
     <Trade levelOfDetail="EXECUTION" tradeDate="20260723" dateTime="20260723;103000" underlyingSymbol="AMZN"
            assetCategory="OPT" buySell="BUY" quantity="2" tradePrice="1.15" multiplier="100"
            strike="232.5" putCall="P" expiry="20260724" fifoPnlRealized="0" ibCommission="-1.38" />
     <Trade levelOfDetail="EXECUTION" tradeDate="20260723" dateTime="20260723;104000" underlyingSymbol="AMZN"
            assetCategory="OPT" buySell="SELL" quantity="1" tradePrice="1.33" multiplier="100"
-           strike="232.5" putCall="P" expiry="20260724" fifoPnlRealized="18" ibCommission="-0.53" />
+           strike="232.5" putCall="P" expiry="20260724" fifoPnlRealized="16.78" ibCommission="-0.53" />
     <Trade levelOfDetail="EXECUTION" tradeDate="20260723" dateTime="20260723;104500" underlyingSymbol="AMZN"
            assetCategory="OPT" buySell="SELL" quantity="1" tradePrice="1.23" multiplier="100"
-           strike="232.5" putCall="P" expiry="20260724" fifoPnlRealized="8" ibCommission="-0.53" />
+           strike="232.5" putCall="P" expiry="20260724" fifoPnlRealized="6.78" ibCommission="-0.53" />
   `));
   const { fills, detailAvailable } = TradesService.buildFills(rows, []);
   assert.equal(detailAvailable, true);
@@ -126,9 +129,27 @@ test('a detailed statement round-trips through the matcher', () => {
   assert.equal(t.quantity, 2);
   assert.equal(t.date, '2026-07-23');
   assert.equal(t.pnlSource, 'ibkr', "IBKR's realized P&L is present on both exits");
-  assert.equal(t.grossPnl, 26);
   assert.equal(t.commission, 2.44);
-  assert.equal(t.pnl, 23.56);
+  assert.equal(t.pnl, 23.56, 'Flex realized is net — taken as-is');
+  assert.equal(t.grossPnl, 26, 'gross adds the fees back, matching price math');
+});
+
+test('a detail-less Flex statement does NOT suppress local fills for its dates', () => {
+  // The statement has rows for 2026-07-23 but no execution-level columns, so it
+  // can't produce trades — the local executions for that day must still count,
+  // or the day disappears from the journal entirely.
+  const dayLevelOnly = FlexService.parseTrades(wrap(
+    `<Trade tradeDate="20260723" underlyingSymbol="AMZN" assetCategory="OPT"
+            fifoPnlRealized="22.54" ibCommission="-3.46" />`
+  ));
+  const t = Date.parse('2026-07-23T14:30:00Z') / 1000;
+  const { fills, detailAvailable } = TradesService.buildFills(dayLevelOnly, [
+    { execId: 'x1', time: t, symbol: 'AMZN', secType: 'OPT', side: 'BOT', price: 1.15, quantity: 1 },
+    { execId: 'x2', time: t + 600, symbol: 'AMZN', secType: 'OPT', side: 'SLD', price: 1.33, quantity: 1 },
+  ]);
+  assert.equal(detailAvailable, false);
+  assert.deepEqual(fills.map((f) => f.id), ['x1', 'x2'], 'local fills survive');
+  assert.equal(matchTrades(fills).length, 1, 'and still produce a trade');
 });
 
 test('local fills are dropped for dates the Flex statement already covers', () => {

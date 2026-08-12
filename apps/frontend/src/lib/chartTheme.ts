@@ -111,6 +111,9 @@ export const SESSION_COLORS = {
   openingRange: '#c084fc', // first-5min high/low — purple
   shadePre:     'rgba(56,189,248,0.06)',  // pre-market background tint (cool)
   shadePost:    'rgba(168,85,247,0.06)',  // post-market background tint (violet)
+  // Live extended-hours price on the daily chart (TradingView's Pre/Post line).
+  preMarketPrice:  '#ff9800', // orange
+  postMarketPrice: '#2962ff', // blue
 } as const;
 
 // ─── Rectangle color palette (border + low-alpha fill) ──────────────────────────

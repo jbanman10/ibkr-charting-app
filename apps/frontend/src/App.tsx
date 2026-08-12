@@ -29,6 +29,7 @@ import MarketSummary from './components/MarketSummary/MarketSummary';
 import WatchlistPanel from './components/Watchlist/WatchlistPanel';
 import RvolScanner from './components/Scanner/RvolScanner';
 import PnlCalendar from './components/PnlCalendar/PnlCalendar';
+import SettingsModal from './components/Settings/SettingsModal';
 import SideRail, { type RailItem } from './components/SideRail/SideRail';
 import MallardIcon from './components/MallardIcon';
 import AlertToasts from './components/AlertToasts/AlertToasts';
@@ -46,6 +47,7 @@ export default function App() {
   const [showWatchlist, setShowWatchlist] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showPnl, setShowPnl] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   // Trade-execution arrows on charts, toggled from the rail; persisted.
   const [showTrades, setShowTrades] = useState(() => localStorage.getItem('ibkr_show_trades') !== '0');
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
@@ -256,6 +258,20 @@ export default function App() {
         </svg>
       ),
     },
+    {
+      id: 'settings',
+      title: 'Settings',
+      active: showSettings,
+      onClick: () => setShowSettings((v) => !v),
+      icon: (
+        // gear
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="2.6" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M8 1.4v1.8M8 12.8v1.8M14.6 8h-1.8M3.2 8H1.4M12.67 3.33l-1.27 1.27M4.6 11.4l-1.27 1.27M12.67 12.67 11.4 11.4M4.6 4.6 3.33 3.33"
+            stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -266,7 +282,7 @@ export default function App() {
         <div className={styles.toolbarLeft}>
           <div className={styles.brand}>
             <MallardIcon size={20} />
-            <span className={styles.brandName}>IBKR Chart</span>
+            <span className={styles.brandName}>Mallard</span>
           </div>
 
           <div className={styles.divider} />
@@ -391,6 +407,9 @@ export default function App() {
           onOpenTradeOnChart={handleOpenTradeOnChart}
         />
       )}
+
+      {/* ── App settings ────────────────────────────────────────────── */}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
 
       {/* ── Triggered-alert notifications (bottom right) ────────────── */}
       <AlertToasts />

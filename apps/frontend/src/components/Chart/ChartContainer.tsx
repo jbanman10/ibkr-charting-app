@@ -28,6 +28,8 @@ import { SessionShadingPrimitive } from '../../lib/sessionShadingPrimitive';
 import { DrawingsPrimitive } from '../../lib/drawingsPrimitive';
 import { EarningsPrimitive, type EarningsMark, type EarningsMarkDetail } from '../../lib/earningsPrimitive';
 import { BollingerFillPrimitive, type BollingerBandFill } from '../../lib/bollingerFillPrimitive';
+import { getTheme, subscribeTheme } from '../../lib/themeStore';
+import { toChartOptions, toCandleOptions, toVolumeColors } from '../../lib/theme';
 import { etTickMarkFormatter, etCrosshairFormatter } from '../../lib/chartTime';
 import { indicatorColors } from '../../lib/chartTheme';
 import DrawingCanvas, { type DrawingToolType } from './DrawingCanvas';
@@ -177,6 +179,10 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const drawingsPrimRef = useRef<DrawingsPrimitive | null>(null);
     const earningsPrimRef = useRef<EarningsPrimitive | null>(null);
     const bbFillPrimRef = useRef<BollingerFillPrimitive | null>(null);
+    // Volume points with their direction kept explicitly — histogram points
+    // carry a baked-in colour, so a theme change needs to know which way each
+    // bar went to recolour it.
+    const volDirRef = useRef<Array<{ time: Time; value: number; up: boolean }>>([]);
     const barCountRef = useRef(0); // newest bar's logical index = barCount - 1
     const tfRef        = useRef(timeframe);
     // Newest bar time (unix seconds) currently on the chart. lightweight-charts'
@@ -231,19 +237,21 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       const el = containerRef.current;
       if (!el) return;
 
+      // The active theme wins over the built-in defaults. lightweight-charts
+      // can't read CSS variables, so colours are pushed in here and re-pushed
+      // by the subscription below whenever the theme changes.
+      const theme0 = getTheme();
       const chart = createChart(el, {
         ...CHART_OPTIONS,
+        ...toChartOptions(theme0),
         width: el.clientWidth,
         height: el.clientHeight,
       });
 
       const candle = chart.addCandlestickSeries({
-        upColor:         '#089981',
-        downColor:       '#f23645',
-        borderUpColor:   '#089981',
-        borderDownColor: '#f23645',
-        wickUpColor:     '#089981',
-        wickDownColor:   '#f23645',
+        borderVisible: true,
+        wickVisible: true,
+        ...toCandleOptions(theme0),
       });
 
       const volume = chart.addHistogramSeries({
@@ -373,12 +381,14 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         low:   Number(b.low),
         close: Number(b.close),
       }));
-      const vd: HistogramData[] = ordered.map((b) => ({
-        time:  toChartTime(b.time, tf),
+      const vol = toVolumeColors(getTheme());
+      volDirRef.current = ordered.map((b) => ({
+        time: toChartTime(b.time, tf),
         value: Number(b.volume),
-        color: Number(b.close) >= Number(b.open)
-          ? 'rgba(8,153,129,0.4)'
-          : 'rgba(242,54,69,0.4)',
+        up: Number(b.close) >= Number(b.open),
+      }));
+      const vd: HistogramData[] = volDirRef.current.map((p) => ({
+        time: p.time, value: p.value, color: p.up ? vol.upColor : vol.downColor,
       }));
       return { cd, vd, lastTime: Number(ordered[ordered.length - 1].time) };
     }, []);
@@ -479,11 +489,13 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
           time: t, open: Number(bar.open), high: Number(bar.high),
           low: Number(bar.low), close: Number(bar.close),
         });
+        const vol = toVolumeColors(getTheme());
+        const up = Number(bar.close) >= Number(bar.open);
+        const last = volDirRef.current[volDirRef.current.length - 1];
+        if (last && last.time === t) { last.value = Number(bar.volume); last.up = up; }
+        else volDirRef.current.push({ time: t, value: Number(bar.volume), up });
         volumeRef.current?.update({
-          time: t, value: Number(bar.volume),
-          color: Number(bar.close) >= Number(bar.open)
-            ? 'rgba(8,153,129,0.4)'
-            : 'rgba(242,54,69,0.4)',
+          time: t, value: Number(bar.volume), color: up ? vol.upColor : vol.downColor,
         });
       } catch (err) {
         console.error('[ChartContainer] updateBar error:', err);
@@ -550,6 +562,24 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       }
       bbFillPrimRef.current?.setBands(bands);
     }, []);
+
+    // Re-colour on theme change. The UI follows CSS variables on its own, but
+    // the chart canvas has to be told; volume bars carry per-point colours, so
+    // they're rebuilt from the last data we set rather than re-fetched.
+    useEffect(() => subscribeTheme((theme) => {
+      const chart = chartRef.current;
+      const candle = candleRef.current;
+      if (!chart || !candle) return;
+      chart.applyOptions(toChartOptions(theme));
+      candle.applyOptions(toCandleOptions(theme));
+      const vol = toVolumeColors(theme);
+      const volume = volumeRef.current;
+      if (volume && volDirRef.current.length) {
+        volume.setData(volDirRef.current.map((p) => ({
+          time: p.time, value: p.value, color: p.up ? vol.upColor : vol.downColor,
+        })));
+      }
+    }), []);
 
     // Session level horizontal lines (prev-day H/L, pre-market H/L, opening range).
     const setSessionLevels = useCallback((lines: SessionLevelLine[]) => {

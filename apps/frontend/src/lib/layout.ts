@@ -132,6 +132,10 @@ export interface SessionOverlays {
   prevDayHL: boolean;    // previous day high & low
   premarketHL: boolean;  // pre-market high & low
   shading: boolean;      // pre/post-market background tint
+  // Live pre/post-market price line on the DAILY chart. Optional so panels
+  // saved before it existed still read as ON — absence means "not yet chosen",
+  // and only an explicit `false` turns it off.
+  extendedPrice?: boolean;
 }
 
 export const DEFAULT_SESSION_OVERLAYS: SessionOverlays = {
@@ -139,6 +143,7 @@ export const DEFAULT_SESSION_OVERLAYS: SessionOverlays = {
   prevDayHL: true,
   premarketHL: true,
   shading: true,
+  extendedPrice: true,
 };
 
 /** Style overrides for one session level line (PDH/PDL/PMH/PML/ORH/ORL). */
