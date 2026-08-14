@@ -124,6 +124,15 @@
   border-color: var(--border-muted);
 }
 
+/* Transient confirmation after a journal capture. */
+.captureMsg {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  animation: fadeUp 0.2s var(--ease-out) both;
+}
+
 .resetBtn:hover {
   background: rgba(218,54,51,0.08) !important;
   color: var(--candle-down) !important;

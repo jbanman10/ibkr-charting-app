@@ -83,6 +83,17 @@ function toChartTime(unixSeconds: number | string, timeframe: string): Time {
 
 // ─── Chart options ────────────────────────────────────────────────────────────
 
+// Blank bars kept to the right of the newest candle, per timeframe.
+//
+// The 1m chart re-pins to the live edge on every resize (opening the watchlist,
+// dragging a splitter, maximizing a panel), and `scrollToRealTime()` leaves
+// exactly `rightOffset` bars of space — so with the default the candles end up
+// jammed against the price axis with nowhere to read into. Slower timeframes
+// keep the user's own view on resize, so they don't need the extra room.
+const DEFAULT_RIGHT_OFFSET = 6;
+const RIGHT_OFFSET_BARS: Record<string, number> = { '1m': 20 };
+export const rightOffsetFor = (tf: string): number => RIGHT_OFFSET_BARS[tf] ?? DEFAULT_RIGHT_OFFSET;
+
 const CHART_OPTIONS: DeepPartial<ChartOptions> = {
   layout: {
     background: { type: ColorType.Solid, color: '#131722' }, // TV dark chart bg
@@ -103,8 +114,9 @@ const CHART_OPTIONS: DeepPartial<ChartOptions> = {
     borderColor: '#2a2e39',
     timeVisible: true,
     secondsVisible: false,
-    // A little blank space to the right of the last candle (breathing room +
-    // somewhere to extend a rectangle past the current bar).
+    // Blank space to the right of the last candle (breathing room + somewhere to
+    // extend a rectangle past the current bar). Overridden per timeframe by
+    // rightOffsetFor() once the chart exists.
     rightOffset: 6,
     // Axis labels in Exchange time (ET); bar data stays UTC epoch.
     tickMarkFormatter: etTickMarkFormatter,
@@ -202,6 +214,12 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
 
     // Keep timeframe ref current so callbacks always use latest value
     useEffect(() => { tfRef.current = timeframe; }, [timeframe]);
+
+    // The panel keeps its chart instance across timeframe switches, so the
+    // buffer has to follow the timeframe rather than only being set at creation.
+    useEffect(() => {
+      chartRef.current?.timeScale().applyOptions({ rightOffset: rightOffsetFor(timeframe) });
+    }, [timeframe]);
 
     // Crosshair follows the mouse freely; hold Ctrl to magnet/snap it to candles.
     // Only while NO drawing tool is active: the drawing overlay has its own Ctrl
@@ -311,6 +329,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         setDims({ w, h });
       });
       ro.observe(el);
+      chart.timeScale().applyOptions({ rightOffset: rightOffsetFor(tfRef.current) });
       setDims({ w: el.clientWidth, h: el.clientHeight });
 
       return () => {
@@ -435,7 +454,12 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         // fit the full history as before.
         if (tfRef.current === '1m') {
           const n = built.cd.length;
-          chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - 180), to: n + 6 });
+          // Same buffer the resize path leaves, so the initial view and every
+          // later re-pin sit at the same distance from the axis.
+          chart.timeScale().setVisibleLogicalRange({
+            from: Math.max(0, n - 180),
+            to: n + rightOffsetFor(tfRef.current),
+          });
         } else {
           chart.timeScale().fitContent();
         }
