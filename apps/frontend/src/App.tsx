@@ -30,6 +30,8 @@ import WatchlistPanel from './components/Watchlist/WatchlistPanel';
 import RvolScanner from './components/Scanner/RvolScanner';
 import PnlCalendar from './components/PnlCalendar/PnlCalendar';
 import SettingsModal from './components/Settings/SettingsModal';
+import JournalCalendar from './components/Journal/JournalCalendar';
+import { captureChartGrid, saveCapture, todayEt } from './lib/chartCapture';
 import SideRail, { type RailItem } from './components/SideRail/SideRail';
 import MallardIcon from './components/MallardIcon';
 import AlertToasts from './components/AlertToasts/AlertToasts';
@@ -48,6 +50,9 @@ export default function App() {
   const [showScanner, setShowScanner] = useState(false);
   const [showPnl, setShowPnl] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showJournal, setShowJournal] = useState(false);
+  // Transient toolbar feedback after a capture ('Saved' / an error).
+  const [captureMsg, setCaptureMsg] = useState<string | null>(null);
   // Trade-execution arrows on charts, toggled from the rail; persisted.
   const [showTrades, setShowTrades] = useState(() => localStorage.getItem('ibkr_show_trades') !== '0');
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
@@ -177,6 +182,27 @@ export default function App() {
     setMaximizedPanelId(id); // give the review the whole grid
   }, [focusedPanelId, handlePanelChange]);
 
+  // Snapshot the chart grid into today's journal entry. One capture per day, so
+  // pressing this again replaces it.
+  const handleCapture = useCallback(async () => {
+    setCaptureMsg(null);
+    try {
+      const shot = captureChartGrid();
+      if (!shot) { setCaptureMsg('No charts to capture'); return; }
+      if (!shot.layers) { setCaptureMsg('Charts not painted yet — try again'); return; }
+      await saveCapture(todayEt(), shot.dataUrl);
+      setCaptureMsg('Captured to journal');
+    } catch (err) {
+      setCaptureMsg(err instanceof Error ? err.message : 'Capture failed');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!captureMsg) return;
+    const t = setTimeout(() => setCaptureMsg(null), 2500);
+    return () => clearTimeout(t);
+  }, [captureMsg]);
+
   const handleColumnResize = useCallback((sizes: number[]) => {
     setLayout((l) => ({ ...l, columnSizes: sizes }));
   }, []);
@@ -259,6 +285,20 @@ export default function App() {
       ),
     },
     {
+      id: 'journal',
+      title: 'Trading journal (charts & notes)',
+      active: showJournal,
+      onClick: () => setShowJournal((v) => !v),
+      icon: (
+        // notebook with a page mark
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <rect x="3" y="2.2" width="10.5" height="11.6" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+          <path d="M3 5h10.5M3 8h10.5M3 11h6.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+          <path d="M5.6 1.4v2.2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+        </svg>
+      ),
+    },
+    {
       id: 'settings',
       title: 'Settings',
       active: showSettings,
@@ -300,6 +340,21 @@ export default function App() {
         </div>
 
         <div className={styles.toolbarRight}>
+          {captureMsg && <span className={styles.captureMsg}>{captureMsg}</span>}
+          <button
+            className={styles.iconBtn}
+            onClick={handleCapture}
+            title="Capture the charts into today's journal entry (replaces today's capture)"
+          >
+            {/* camera */}
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+              <path d="M1.5 4.5h2.2l1-1.6h4.6l1 1.6h2.2a.8.8 0 0 1 .8.8v5.4a.8.8 0 0 1-.8.8H1.5a.8.8 0 0 1-.8-.8V5.3a.8.8 0 0 1 .8-.8z"
+                stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+              <circle cx="7" cy="8" r="2.1" stroke="currentColor" strokeWidth="1.2" />
+            </svg>
+            <span>Capture</span>
+          </button>
+
           <button
             className={styles.iconBtn}
             onClick={() => setShowSummary(true)}
@@ -407,6 +462,9 @@ export default function App() {
           onOpenTradeOnChart={handleOpenTradeOnChart}
         />
       )}
+
+      {/* ── Trading journal (charts + notes) ────────────────────────── */}
+      {showJournal && <JournalCalendar onClose={() => setShowJournal(false)} />}
 
       {/* ── App settings ────────────────────────────────────────────── */}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}

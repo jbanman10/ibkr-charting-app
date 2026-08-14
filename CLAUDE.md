@@ -171,6 +171,18 @@ Four workspaces:
   - `components/Grid/ResizableGrid.tsx` + `lib/layout.ts` — CSS-grid layout presets with draggable
     splitters; per-window layout is keyed `ibkr_chart_layout_v3:win<id>` (from a `?win=` param).
   - `components/MarketSummary/` — the "morning summary" popup (SPY/QQQ, econ calendar, news).
+  - **Trading journal (charts + notes)** — separate from the P&L calendar: same month grid, but a
+    day holds ONE chart capture and ONE note. `lib/chartCapture.ts` composites every `<canvas>`
+    inside each `#chart-panel-*` onto one output canvas positioned on the panels' real screen
+    geometry, so a 2×2 grid captures as a 2×2 grid. Done this way (rather than Electron
+    `capturePage`) it works identically in the browser and the exe with no IPC bridge — the preload
+    is deliberately a stub — and it picks up drawings/indicators/markers for free since those are
+    painted into the chart canvases. DOM chrome (panel toolbars, price readouts) can NOT be
+    composited, so each panel gets a drawn `SYMBOL · TF` header. `routes/journal.routes.ts` stores
+    notes in `<DATA_DIR>/store/journal.json` and images as real PNGs under `<DATA_DIR>/journal/`
+    (`:date` is a filename — it's regex-validated against traversal); the image route raises
+    Fastify's 1MB `bodyLimit`, which a base64 grid shot would otherwise exceed. Capture button is
+    in the top toolbar (`App.tsx`), the calendar is a rail modal (`components/Journal/`).
   - **Theming** — `lib/theme.ts` + `lib/themeStore.ts`. A theme is the **same nine fields
     chartthemes.com publishes, in that order** (bearish body/wick/border, bullish body/wick/border,
     background, foreground, text) plus an optional `accent`, so a theme from that site transfers
@@ -282,9 +294,14 @@ doesn't crash the dev server.
   bars (real opens, gaps and all — no continuity snap), matching TWS.
 - **Drawings extend/clip to the plot area, not over the price axis.** `renderDrawings` clips to
   `plotRight` (canvas width − price-scale width). The drawings primitive's canvas is already the
-  pane width, so it passes that as the right edge (don't subtract the axis twice). A small
+  pane width, so it passes that as the right edge (don't subtract the axis twice). A
   `timeScale.rightOffset` leaves room to draw past the last bar; dragging a rectangle's far corner
-  to the edge auto-sets `extendRight`.
+  to the edge auto-sets `extendRight`. **The offset is per timeframe** (`rightOffsetFor` in
+  `ChartContainer`): 20 bars on 1m, 6 elsewhere. Only the 1m chart re-pins to the live edge on
+  every resize (`scrollToRealTime()`, which leaves exactly `rightOffset`), so without the larger
+  buffer its candles sit flush against the price axis whenever the layout shifts — opening the
+  watchlist, dragging a splitter, maximizing a panel. It's applied at mount, on timeframe change
+  (the panel keeps its chart instance across switches), and in the 1m initial visible range.
 - **Backend port is `BACKEND_PORT`, not `PORT`.** Generic `PORT` gets hijacked by dev/preview
   tooling and would move the backend off 3001 (where the Vite proxy points). Keep it dedicated.
 - **One IBKR connection per `IBKR_CLIENT_ID`.** TWS rejects a second socket using the same client

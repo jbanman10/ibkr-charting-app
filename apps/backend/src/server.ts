@@ -15,6 +15,7 @@ import { registerScannerRoutes } from './routes/scanner.routes.js';
 import { registerEarningsRoutes } from './routes/earnings.routes.js';
 import { registerPnlRoutes } from './routes/pnl.routes.js';
 import { registerTradesRoutes } from './routes/trades.routes.js';
+import { registerJournalRoutes } from './routes/journal.routes.js';
 import { registerWsRoute } from './routes/ws.routes.js';
 
 // ─── Logger setup — pino-pretty only if it's available, plain JSON otherwise ─
@@ -42,7 +43,7 @@ async function bootstrap(): Promise<void> {
   // ─── Plugins ────────────────────────────────────────────────────────────────
   await app.register(cors, {
     origin: config.server.corsOrigin,
-    methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   });
 
   await app.register(websocket);
@@ -62,6 +63,7 @@ async function bootstrap(): Promise<void> {
   await registerEarningsRoutes(app);
   await registerPnlRoutes(app);
   await registerTradesRoutes(app);
+  await registerJournalRoutes(app);
   await registerWsRoute(app);
 
   // ─── Static frontend (Electron / production) ──────────────────────────────────
