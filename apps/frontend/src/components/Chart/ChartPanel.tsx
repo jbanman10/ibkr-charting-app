@@ -72,6 +72,10 @@ function parseTimeframe(raw: string): Timeframe | null {
 // How often the daily pre/post price line may be redrawn from ticks.
 const EXT_PRICE_MS = 400;
 
+// Recomputing every MA across the full history costs a few ms, so the live tick
+// path goes through a trailing throttle instead of running per tick.
+const INDICATOR_THROTTLE_MS = 400;
+
 // Default look + overlay group for each session level. Single source of truth
 // for both line building and the double-click settings card.
 const LEVEL_META: Record<string, {
@@ -229,13 +233,37 @@ export default function ChartPanel({
     { detail: EarningsMarkDetail; kind: EarningsMark['kind']; x: number } | null
   >(null);
 
+  /**
+   * Closed bars plus the LIVE forming candle — the series every derived visual
+   * (indicators, session levels) should be computed from.
+   *
+   * barsRef holds closed bars only, and right after a snapshot its last element
+   * is a *copy* of the candle that is still forming: ticks mutate formingRef,
+   * never that copy. Reading barsRef directly therefore feeds indicators a
+   * frozen value for the newest candle, and once the clock rolls it leaves them
+   * a whole bar behind the chart — which is why the moving averages looked
+   * stuck between bar closes.
+   */
+  const seriesBars = useCallback((): Bar[] => {
+    const bars = barsRef.current;
+    const forming = formingRef.current;
+    if (!forming) return bars;
+    if (!bars.length) return [forming];
+    const lastT = Number(bars[bars.length - 1].time);
+    const formingT = Number(forming.time);
+    if (formingT > lastT) return [...bars, forming];
+    // Same bar: the live copy wins over the stale closed one.
+    if (formingT === lastT) return [...bars.slice(0, -1), forming];
+    return bars;
+  }, []);
+
   // Recompute session levels + pre/post shading from the current bar history.
   // Intraday-only; clears the overlays on daily/weekly or when toggled off.
   const recomputeSessions = useCallback(() => {
     const handle = chartRef.current;
     if (!handle) return;
     const ov = panel.sessionOverlays;
-    let bars = barsRef.current;
+    const bars = seriesBars();
     if (!INTRADAY_TF.has(panel.timeframe) || !bars.length) {
       // Daily/weekly: no session levels (they're intraday concepts), but the
       // live extended-hours price still belongs here — see buildExtendedPriceLine.
@@ -243,34 +271,42 @@ export default function ChartPanel({
       handle.setSessionRegions([]);
       return;
     }
-    // Include the live forming bar so the shading/levels extend to the newest
-    // candle instead of lagging until the bar closes.
-    const forming = formingRef.current;
-    if (forming && Number(forming.time) > Number(bars[bars.length - 1].time)) {
-      bars = [...bars, forming];
-    }
     handle.setSessionLevels(buildSessionLines(computeSessionLevels(bars), ov, panel.sessionLevelStyles));
     handle.setSessionRegions(ov.shading ? computeSessionRegions(bars) : []);
-  }, [panel.timeframe, panel.sessionOverlays, panel.sessionLevelStyles]);
+  }, [panel.timeframe, panel.sessionOverlays, panel.sessionLevelStyles, seriesBars]);
 
   // Compute + apply BOTH chart-source and daily-source (MTF) MAs in one pass —
   // setIndicators replaces the whole set, so they must be sent together.
   const applyIndicators = useCallback(() => {
     const handle = chartRef.current;
-    if (!handle || !barsRef.current.length) return;
+    const series = seriesBars();
+    if (!handle || !series.length) return;
     const active = panel.indicators.filter((i) => i.visible);
     const chartCfgs = active.filter((i) => (i.source ?? 'chart') === 'chart');
     const dailyCfgs = active.filter((i) => i.source === 'daily');
     // Live price drives today's daily close so the projected level reacts.
-    const livePrice = formingRef.current?.close
-      ?? (barsRef.current.length ? Number(barsRef.current[barsRef.current.length - 1].close) : null);
+    const livePrice = Number(series[series.length - 1].close);
     handle.setIndicators([
-      ...computeIndicators(barsRef.current, chartCfgs, panel.timeframe),
+      ...computeIndicators(series, chartCfgs, panel.timeframe),
       ...(dailyCfgs.length && dailyBarsRef.current.length
-        ? computeDailyIndicators(barsRef.current, dailyBarsRef.current, dailyCfgs, panel.timeframe, livePrice)
+        ? computeDailyIndicators(series, dailyBarsRef.current, dailyCfgs, panel.timeframe, livePrice)
         : []),
     ]);
-  }, [panel.indicators, panel.timeframe]);
+  }, [panel.indicators, panel.timeframe, seriesBars]);
+
+  // Trailing-throttled indicator refresh for the live tick path.
+  const indicatorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleIndicators = useCallback(() => {
+    if (indicatorTimerRef.current != null) return;
+    indicatorTimerRef.current = setTimeout(() => {
+      indicatorTimerRef.current = null;
+      applyIndicators();
+    }, INDICATOR_THROTTLE_MS);
+  }, [applyIndicators]);
+
+  useEffect(() => () => {
+    if (indicatorTimerRef.current != null) clearTimeout(indicatorTimerRef.current);
+  }, []);
 
   const renderSnapshot = useCallback((snap: Bar[]) => {
     if (!chartRef.current || !snap.length) return;
@@ -483,9 +519,13 @@ export default function ChartPanel({
     // feed has gone quiet (dead/stomped stream), skip the local rollover — a
     // tick-only chart drifts into malformed, gappy candles.
     const feedFresh = Date.now() - lastFeedRef.current < 120_000;
-    if (feedFresh && nowSec - Number(base.time) >= tfSec) {
-      const steps = Math.floor((nowSec - Number(base.time)) / tfSec);
-      const newTime = Number(base.time) + steps * tfSec;
+    const steps = Math.floor((nowSec - Number(base.time)) / tfSec);
+    // Only ever pre-empt the NEXT bar. If more than one boundary has passed the
+    // feed is behind or the tape was quiet, and jumping straight to the newest
+    // slot silently skipped every bar in between — a real hole in the series
+    // until the ~60s resync refilled it. Let the authoritative feed open those.
+    if (feedFresh && steps === 1) {
+      const newTime = Number(base.time) + tfSec;
       // Keep the just-finalized bar in the closed-bar history so overlays/session
       // math still see it until the authoritative bar_close confirms it.
       const cidx = barsRef.current.findIndex((b) => Number(b.time) === Number(base.time));
@@ -493,6 +533,7 @@ export default function ChartPanel({
       const nb: Bar = { time: newTime, open: price, high: price, low: price, close: price, volume: 0 };
       formingRef.current = nb;
       chartRef.current?.updateBar(nb);
+      applyIndicators(); // a bar just closed locally — advance the MAs with it
       recomputeSessions();
       return;
     }
@@ -506,7 +547,8 @@ export default function ChartPanel({
         if (formingRef.current) chartRef.current?.updateBar(formingRef.current);
       });
     }
-  }, [panel.symbol, panel.timeframe, recomputeSessions]);
+    scheduleIndicators();
+  }, [panel.symbol, panel.timeframe, recomputeSessions, applyIndicators, scheduleIndicators]);
 
   useEffect(() => {
     tickHandlerRef.current = applyTick;
@@ -533,6 +575,7 @@ export default function ChartPanel({
       formingRef.current = { ...bar };
       chartRef.current?.updateBar(bar);
       checkAlertsRef.current(Number(bar.close)); // backstop when ticks are sparse
+      applyIndicators(); // the forming bar moved, so the MAs must move with it
       recomputeSessions();
     };
 
