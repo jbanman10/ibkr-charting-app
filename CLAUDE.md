@@ -275,6 +275,18 @@ doesn't crash the dev server.
 - **Time axis is Exchange time (ET), not UTC.** Bars stay UTC epoch; only the display is converted
   via `lib/chartTime.ts` formatters wired into `CHART_OPTIONS`. Keep session logic (`lib/sessions.ts`)
   and the axis on the same ET basis.
+- **Anything derived from bars must read `seriesBars()`, never `barsRef` directly.**
+  `barsRef` holds CLOSED bars only, and right after a snapshot its last element is a *copy* of the
+  candle still forming — ticks mutate `formingRef`, never that copy. Reading `barsRef` therefore
+  feeds a FROZEN value for the newest candle, and once the clock rolls leaves it a whole bar behind
+  the chart. `seriesBars()` merges the live forming bar over the stale copy (or appends it when
+  newer); indicators and session levels both go through it. Indicators also have to be recomputed
+  on `bar_update` and at the local rollover — a full recompute is ~0.04ms, so there's no reason to
+  skip it — otherwise the MAs only move at `bar_close`.
+- **The clock-driven rollover pre-empts exactly ONE bar.** `applyTick` opens the next candle
+  locally when the boundary passes so it appears on time; it used to jump `steps` bars ahead when
+  several boundaries had passed, silently skipping every bar in between and leaving a hole until
+  the ~60s resync. It now fabricates only when `steps === 1` and otherwise waits for the feed.
 - **Live candles come from IBKR `keepUpToDate`, not aggregation.** The old 5-sec `BarAggregator`
   (+ flat-fill, reconcile, continuity, deep-resync) is gone. `keepUpToDate` keeps the *forming* bar
   correct (incl. today's daily bar — no more "aggregate today's intraday" hack) but does **not**
