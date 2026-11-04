@@ -16,9 +16,10 @@ import type { EarningsInfo } from '@ibkr-chart/types';
 import type { SeriesMarker, Time } from 'lightweight-charts';
 import { computeIndicators, computeDailyIndicators, indicatorKey, baseIndicatorKey } from '../../lib/indicators';
 import { computeSessionLevels, computeSessionRegions, currentSession } from '../../lib/sessions';
+import { getChartSettings, subscribeChartSettings } from '../../lib/chartSettingsStore';
 import { SESSION_COLORS, RECT_PALETTE, type RectColor } from '../../lib/chartTheme';
 import type { SessionOverlays, SessionLevelStyle } from '../../lib/layout';
-import ChartContainer, { type ChartHandle, type SessionLevelLine } from './ChartContainer';
+import ChartContainer, { type ChartHandle, type SessionLevelLine, type HoverBar } from './ChartContainer';
 import PriceDisplay from './PriceDisplay';
 import IndicatorPanel from './IndicatorPanel';
 import DrawingSettings from './DrawingSettings';
@@ -196,6 +197,11 @@ export default function ChartPanel({
   const barsRef = useRef<Bar[]>([]);            // closed bars — authoritative, straight from IBKR
   const chartReadyRef = useRef(false);
   const formingRef = useRef<Bar | null>(null);  // current live (forming) bar
+  // Last AUTHORITATIVE value for the forming minute — a copy that ticks never
+  // touch, unlike formingRef which they mutate in place. Used when a local
+  // rollover has to write the finished minute into barsRef, so tick-derived
+  // OHLC never enters the closed-bar history.
+  const authFormingRef = useRef<Bar | null>(null);
   const dailyBarsRef = useRef<Bar[]>([]);       // daily bars for daily-source (MTF) MAs
   const chartAreaRef = useRef<HTMLDivElement>(null); // for clamping the earnings popover
   const gotSnapshotRef = useRef(false);         // has the initial snapshot arrived for this sub?
@@ -222,7 +228,9 @@ export default function ChartPanel({
   // on each bar close (~once/min), not on every live update.
   const [bars, setBars] = useState<Bar[]>([]);
   // Volume of the candle under the crosshair (null when not hovering a bar).
-  const [hoverVolume, setHoverVolume] = useState<number | null>(null);
+  // The bar under the crosshair — drives the on-chart legend. Null = the pointer
+  // is off the chart, so the legend falls back to the newest bar.
+  const [hoverBar, setHoverBar] = useState<HoverBar | null>(null);
   // Earnings: next report date + last 4 quarters (bubbles on the daily chart).
   const [earnings, setEarnings] = useState<EarningsInfo | null>(null);
   // Trade being reviewed from the P&L journal — its legs draw as labelled
@@ -312,6 +320,7 @@ export default function ChartPanel({
     if (!chartRef.current || !snap.length) return;
     chartRef.current.setData(snap);
     formingRef.current = { ...snap[snap.length - 1] };
+    authFormingRef.current = { ...snap[snap.length - 1] };
     applyIndicators();
     recomputeSessions();
   }, [applyIndicators, recomputeSessions]);
@@ -374,6 +383,7 @@ export default function ChartPanel({
     gotSnapshotRef.current = false;
     barsRef.current = [];
     formingRef.current = null;
+    authFormingRef.current = null;
     prevPriceRef.current = null;
     extPriceRef.current = null; // last price belongs to the OLD symbol
     dailyBarsRef.current = []; // the daily-bars effect refetches for the new symbol
@@ -507,6 +517,12 @@ export default function ChartPanel({
     if (price <= 0 || !base) return;
     checkAlertsRef.current(price);
 
+    // 'exact' mode: the chart shows only what IBKR has actually sent, so ticks
+    // must not touch bar OHLC and must not fabricate a rollover. Alerts (above)
+    // still run off every tick — it is only the BARS that are left alone. Read
+    // live rather than captured so toggling the setting takes effect at once.
+    if (getChartSettings().candleUpdates !== 'smooth') return;
+
     // Clock-driven rollover: if the minute (bar boundary) has passed but IBKR's
     // keepUpToDate update hasn't arrived yet, open the next candle locally at the
     // current price so it appears right on the boundary (TWS-like) instead of a
@@ -523,17 +539,25 @@ export default function ChartPanel({
     // Only ever pre-empt the NEXT bar. If more than one boundary has passed the
     // feed is behind or the tape was quiet, and jumping straight to the newest
     // slot silently skipped every bar in between — a real hole in the series
-    // until the ~60s resync refilled it. Let the authoritative feed open those.
+    // until the periodic resync (3–3.5 min) refilled it. Let the feed open those.
     if (feedFresh && steps === 1) {
       const newTime = Number(base.time) + tfSec;
-      // Keep the just-finalized bar in the closed-bar history so overlays/session
-      // math still see it until the authoritative bar_close confirms it.
-      const cidx = barsRef.current.findIndex((b) => Number(b.time) === Number(base.time));
-      if (cidx >= 0) barsRef.current[cidx] = base; else barsRef.current.push(base);
+      // Close the finished minute with the last AUTHORITATIVE value we hold, not
+      // the tick-painted one. `base` has been mutated by ticks whose price can be
+      // a bid/ask midpoint rather than a trade, and whose volume is stale — and
+      // barsRef is consumed as real history by indicators, session levels and
+      // markers. IBKR's bar_close overwrites it a few seconds later regardless,
+      // so the only question is whether the interim value is plausible or junk.
+      const auth = authFormingRef.current;
+      const closed = auth && Number(auth.time) === Number(base.time) ? auth : base;
+      const cidx = barsRef.current.findIndex((b) => Number(b.time) === Number(closed.time));
+      if (cidx >= 0) barsRef.current[cidx] = closed; else barsRef.current.push(closed);
       const nb: Bar = { time: newTime, open: price, high: price, low: price, close: price, volume: 0 };
       formingRef.current = nb;
+      authFormingRef.current = null; // nothing authoritative for the new minute yet
       chartRef.current?.updateBar(nb);
       applyIndicators(); // a bar just closed locally — advance the MAs with it
+      setBars([...barsRef.current]); // mirror was skipping locally-closed bars
       recomputeSessions();
       return;
     }
@@ -556,6 +580,25 @@ export default function ChartPanel({
 
   useEffect(() => () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); }, []);
 
+  // Switching to 'exact' mid-minute would otherwise leave whatever the ticks had
+  // painted (or a wholly fabricated candle) on screen until IBKR's next update
+  // ~6s later. Re-anchor straight away: the forming bar reverts to its last
+  // authoritative value, and a fabricated candle — which has none — disappears
+  // until IBKR actually opens that minute.
+  useEffect(() => subscribeChartSettings((s) => {
+    if (s.candleUpdates === 'smooth') return;
+    formingRef.current = authFormingRef.current ? { ...authFormingRef.current } : null;
+    const bars = barsRef.current;
+    if (!bars.length) return;
+    const forming = formingRef.current;
+    const series = forming && Number(forming.time) > Number(bars[bars.length - 1].time)
+      ? [...bars, forming]
+      : bars;
+    chartRef.current?.correctBars(series);
+    applyIndicators();
+    recomputeSessions();
+  }), [applyIndicators, recomputeSessions]);
+
   useEffect(() => {
     snapshotHandlerRef.current = (symbol: string, snap: Bar[], tf?: Timeframe) => {
       if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
@@ -563,6 +606,7 @@ export default function ChartPanel({
       gotSnapshotRef.current = true;
       barsRef.current = snap;
       formingRef.current = snap.length ? { ...snap[snap.length - 1] } : null;
+      authFormingRef.current = snap.length ? { ...snap[snap.length - 1] } : null;
       if (chartReadyRef.current) renderSnapshot(snap);
       setBars(snap);
       setError(null);
@@ -572,7 +616,29 @@ export default function ChartPanel({
     barUpdateRef.current = (symbol: string, bar: Bar, tf?: Timeframe) => {
       if (symbol !== panel.symbol || (tf && tf !== panel.timeframe)) return;
       lastFeedRef.current = Date.now();
+
+      // An update for a minute we have already moved PAST is a correction to a
+      // closed bar, not the forming one. Adopting it as `forming` used to wedge
+      // the chart: after a local rollover the chart's newest point is the
+      // fabricated bar, so ChartContainer.updateBar drops this older time —
+      // while formingRef had already regressed to it, which made `steps` >= 2
+      // and disabled the rollover, so every later tick repaint was dropped too.
+      // The candle then sat as a flat volume-0 doji until the next bar_close or
+      // the 3-minute resync. Route it through the closed-bar path instead.
+      const forming = formingRef.current;
+      if (forming && Number(bar.time) < Number(forming.time)) {
+        const bars = barsRef.current;
+        const idx = bars.findIndex((b) => Number(b.time) === Number(bar.time));
+        if (idx >= 0) bars[idx] = bar; else bars.push(bar);
+        chartRef.current?.correctBars([...bars, forming]);
+        applyIndicators();
+        setBars([...bars]);
+        recomputeSessions();
+        return;
+      }
+
       formingRef.current = { ...bar };
+      authFormingRef.current = { ...bar };
       chartRef.current?.updateBar(bar);
       checkAlertsRef.current(Number(bar.close)); // backstop when ticks are sparse
       applyIndicators(); // the forming bar moved, so the MAs must move with it
@@ -590,7 +656,10 @@ export default function ChartPanel({
             cur.close === bar.close && cur.volume === bar.volume) return; // unchanged re-emit
         bars[idx] = bar;
       } else {
+        // A genuinely late bar for an unseen older time lands out of order;
+        // seriesBars / snapToBar / dataTimeRange all assume ascending times.
         bars.push(bar);
+        bars.sort((a, b) => Number(a.time) - Number(b.time));
       }
       barsRef.current = bars;
       const forming = formingRef.current;
@@ -602,6 +671,7 @@ export default function ChartPanel({
         chartRef.current?.correctBars([...bars, forming]);
       } else {
         formingRef.current = { ...bar };
+        authFormingRef.current = { ...bar };
         chartRef.current?.updateBar(bar);
       }
       applyIndicators();
@@ -1064,15 +1134,9 @@ export default function ChartPanel({
     };
   }, [earnings]);
 
-  // Volume readout under the ⓘ chip: the hovered candle's volume, falling back
-  // to the newest bar when the cursor is off the chart.
-  const shownVolume = hoverVolume ?? (displayData ? Number(displayData.volume) : null);
-  const fmtVolume = (n: number) => {
-    if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-    return String(Math.round(n));
-  };
+  // The on-chart legend describes the hovered candle, falling back to the newest
+  // bar when the cursor is off the chart.
+  const legendBar = hoverBar ?? displayData;
 
   // Alt+click anywhere on the panel maximizes it to fill the grid (alt+click
   // again restores) — like TradingView. Caught in the capture phase so it beats
@@ -1093,7 +1157,11 @@ export default function ChartPanel({
     >
       {/* ── Panel toolbar ─────────────────────────────────────────────── */}
       <div className={styles.panelToolbar}>
-        <SymbolSearch currentSymbol={panel.symbol} onSelect={handleSymbolSelect} />
+        <SymbolSearch
+          currentSymbol={panel.symbol}
+          exchange={panel.primaryExchange ?? panel.exchange}
+          onSelect={handleSymbolSelect}
+        />
         <TimeframeSelector
           value={panel.timeframe}
           onChange={(tf: Timeframe) => onPanelChange({ timeframe: tf })}
@@ -1177,15 +1245,7 @@ export default function ChartPanel({
       {/* ── Chart area ────────────────────────────────────────────────── */}
       <div className={styles.chartArea} ref={chartAreaRef}>
         <div className={styles.ohlcvRow}>
-          <PriceDisplay symbol={panel.symbol} data={displayData} />
-          {shownVolume != null && (
-            <div
-              className={`${styles.volChip} ${hoverVolume != null ? styles.volChipHover : ''}`}
-              title={hoverVolume != null ? 'Volume of the hovered candle' : 'Volume of the latest candle'}
-            >
-              Vol {fmtVolume(shownVolume)}
-            </div>
-          )}
+          <PriceDisplay symbol={panel.symbol} data={legendBar} hovering={hoverBar != null} />
           {nextEarnings && (
             <div
               className={`${styles.erChip} ${nextEarnings.soon ? styles.erChipSoon : ''}`}
@@ -1252,7 +1312,7 @@ export default function ChartPanel({
           dataTimeRange={dataTimeRange}
           onReady={handleChartReady}
           onDrawingComplete={() => onToolChange('none')}
-          onHoverVolume={setHoverVolume}
+          onHoverBar={setHoverBar}
           onEarningsClick={(detail, kind, x) => setErPopover({ detail, kind, x })}
         />
 

@@ -171,16 +171,25 @@ interface Props {
   dataTimeRange?: DataTimeRange | null;
   onReady?: () => void;
   onDrawingComplete?: () => void;
-  /** Volume of the bar under the crosshair (null when off-chart). */
-  onHoverVolume?: (volume: number | null) => void;
+  /** The bar under the crosshair (null when off-chart) — drives the overlay legend. */
+  onHoverBar?: (bar: HoverBar | null) => void;
   /** An earnings badge was clicked — show its detail popover. */
   onEarningsClick?: (detail: EarningsMarkDetail, kind: EarningsMark['kind'], x: number) => void;
+}
+
+/** OHLCV of the bar the crosshair is over, for the on-chart legend. */
+export interface HoverBar {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 const ChartContainer = forwardRef<ChartHandle, Props>(
-  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete, onHoverVolume, onEarningsClick }, ref) => {
+  ({ timeframe = '1d', activeTool = 'none', drawings = [], bars = [], selectedDrawingId = null, onDrawingsChange, onDrawingSelect, onDrawingOpenSettings, onIndicatorOpenSettings, onSessionLevelOpenSettings, rectColor, dataTimeRange = null, onReady, onDrawingComplete, onHoverBar, onEarningsClick }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef     = useRef<IChartApi | null>(null);
     const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -205,8 +214,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const cursorPriceRef = useRef<number | null>(null); // price under the mouse (crosshair)
     const markersRef = useRef<SeriesMarker<Time>[]>([]); // execution arrows (re-applied after full repaints)
     const earningsMarksRef = useRef<EarningsMark[]>([]); // earnings badges (need the current bar count)
-    const onHoverVolumeRef = useRef(onHoverVolume);
-    useEffect(() => { onHoverVolumeRef.current = onHoverVolume; }, [onHoverVolume]);
+    const onHoverBarRef = useRef(onHoverBar);
+    useEffect(() => { onHoverBarRef.current = onHoverBar; }, [onHoverBar]);
     const [dims, setDims] = useState({ w: 0, h: 0 });
     // Id of the drawing currently being dragged (move/resize). Its committed copy
     // is hidden from the primitive while the overlay paints the live preview.
@@ -303,12 +312,19 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       bbFillPrimRef.current = bbFillPrim;
 
       // Crosshair tracking: the price under the cursor (for Alt+A price alerts)
-      // and the hovered bar's volume (for the volume readout).
+      // and the whole bar under it (for the on-chart OHLC legend).
       const onCross = (param: { point?: { x: number; y: number }; seriesData?: Map<unknown, unknown> }) => {
         cursorPriceRef.current = param.point ? candle.coordinateToPrice(param.point.y) : null;
+        const cp = param.seriesData?.get(candle) as Partial<HoverBar> | undefined;
         const vp = param.seriesData?.get(volume) as { value?: number } | undefined;
-        onHoverVolumeRef.current?.(
-          param.point && vp && typeof vp.value === 'number' ? vp.value : null
+        onHoverBarRef.current?.(
+          param.point && cp && typeof cp.close === 'number'
+            ? {
+                open: Number(cp.open), high: Number(cp.high),
+                low: Number(cp.low), close: Number(cp.close),
+                volume: typeof vp?.value === 'number' ? vp.value : 0,
+              }
+            : null
         );
       };
       chart.subscribeCrosshairMove(onCross);

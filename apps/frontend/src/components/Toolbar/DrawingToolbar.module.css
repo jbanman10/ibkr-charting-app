@@ -28,7 +28,6 @@
 .btn:hover:not(:disabled) {
   background: var(--bg-elevated);
   color: var(--text-primary);
-  border-color: var(--border-muted);
 }
 
 .btn:disabled {
@@ -39,7 +38,6 @@
 .btn.active {
   background: var(--accent-glow);
   color: var(--accent);
-  border-color: rgba(61,126,255,0.4);
 }
 
 .clearBtn {

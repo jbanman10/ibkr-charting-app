@@ -58,6 +58,7 @@
 }
 
 .actionBtn:hover { background: var(--bg-elevated); color: var(--text-primary); }
+
 .actionActive    { background: var(--accent-glow); color: var(--accent); }
 .closeBtn:hover  { background: var(--candle-down-dim); color: var(--candle-down); }
 
@@ -111,23 +112,6 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 5px;
-}
-
-/* Volume of the hovered (or latest) candle, under the ⓘ chip. */
-.volChip {
-  padding: 2px 8px;
-  border-radius: 5px;
-  background: rgba(19, 23, 34, 0.72);
-  border: 1px solid var(--border-subtle);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.volChipHover {
-  color: var(--text-primary);
-  border-color: var(--border-muted);
 }
 
 /* ─── Loading overlay ───────────────────────────────────────────────────── */

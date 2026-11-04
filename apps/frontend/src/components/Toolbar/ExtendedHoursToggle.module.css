@@ -5,29 +5,27 @@
   width: 26px;
   height: 26px;
   padding: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
+  border: none;
+  border-radius: 5px;
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.12s, color 0.12s;
   flex-shrink: 0;
 }
 
 .btn:hover {
   background: var(--bg-elevated);
   color: var(--text-secondary);
-  border-color: var(--border-muted);
 }
 
+/* Themed, not hardcoded — follows a pasted theme like everything else. */
 .active {
-  background: rgba(240, 180, 41, 0.1);
-  border-color: rgba(240, 180, 41, 0.35);
-  color: #f0b429;
+  background: var(--gold-dim);
+  color: var(--gold);
 }
 
 .active:hover {
-  background: rgba(240, 180, 41, 0.15) !important;
-  color: #f0b429 !important;
-  border-color: rgba(240, 180, 41, 0.5) !important;
+  background: var(--gold-dim);
+  color: var(--gold);
 }

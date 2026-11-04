@@ -121,7 +121,6 @@
 .iconBtn:hover {
   background: var(--bg-elevated);
   color: var(--text-primary);
-  border-color: var(--border-muted);
 }
 
 /* Transient confirmation after a journal capture. */

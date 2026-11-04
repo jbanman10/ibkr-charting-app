@@ -201,24 +201,37 @@ export class MarketDataService {
     return m >= 570 && m < 960;
   }
 
-  // Last on-rollover correction per symbol|timeframe (throttle).
-  private lastCorrect = new Map<string, number>();
+  // Last on-rollover correction per STREAM (throttle). Keyed by reqId, not
+  // symbol|timeframe: subscriptions are per-panel (see the subId work in
+  // ws.gateway), so two panels showing the same symbol+timeframe roll within
+  // milliseconds of each other — a shared key let the first one's correction
+  // suppress the second's for CORRECT_MIN_MS, leaving that panel's just-closed
+  // bar stuck on the stale value.
+  private lastCorrect = new Map<number, number>();
 
   /**
    * On a regular-hours rollover, re-fetch the last few OFFICIAL bars and re-emit
    * the closed ones so the just-finished candle snaps to its authoritative value
    * right as the new candle opens (TWS-style), instead of drifting until the
    * frontend's periodic re-sync. Async (queued on histChain), so it never blocks
-   * live rendering; a per-key throttle coalesces bursts. TRADES only — no clamp
-   * (RTH bars are already NBBO-protected); the forming bar is left to the live feed.
+   * live rendering; a per-stream throttle coalesces bursts.
+   *
+   * RTH ONLY, deliberately — do not "fix" this by dropping the guard:
+   *  - TRADES only, no BID_ASK leg, so there is no NBBO clamp. RTH bars don't
+   *    need one; re-emitting an unclamped pre/post bar would UNDO
+   *    sanitizeExtendedBars and put the stale away-from-market prints back.
+   *  - Adding the clamp means a second historical request per rollover. At one
+   *    per stream per minute, four 1m panels already run ~40 requests per 10
+   *    minutes against IBKR's ~60 limit; doubling that trips pacing.
+   * Extended-hours closes are corrected by the frontend's periodic /api/bars
+   * re-sync instead, which does apply the clamp.
    */
   private correctRecent(stream: ActiveStream): void {
-    const { timeframe, contract, useRTH, reqId, symbol } = stream;
+    const { timeframe, contract, useRTH, reqId } = stream;
     if (timeframe === '1d' || timeframe === '1w') return; // intraday only
-    const key = `${symbol}|${timeframe}`;
     const now = Date.now();
-    if (now - (this.lastCorrect.get(key) ?? 0) < CORRECT_MIN_MS) return;
-    this.lastCorrect.set(key, now);
+    if (now - (this.lastCorrect.get(reqId) ?? 0) < CORRECT_MIN_MS) return;
+    this.lastCorrect.set(reqId, now);
 
     const run = async () => {
       if (!this.activeStreams.has(reqId)) return;
@@ -400,6 +413,11 @@ export class MarketDataService {
     const stream = this.activeStreams.get(reqId);
     if (!stream) return;
     this.activeStreams.delete(reqId);
+    // Drop the throttle entry too. reqIds are monotonic so it would only leak,
+    // but leaving it also meant a resubscribe that happened to reuse a recent
+    // id (timeframe switch, WS reconnect) inherited the old timestamp and had
+    // its first correction suppressed — exactly when it is needed most.
+    this.lastCorrect.delete(reqId);
     try {
       this.ibkr.api.cancelHistoricalData(reqId);
       this.ibkr.api.cancelMktData(reqId + TICK_REQID_OFFSET);
