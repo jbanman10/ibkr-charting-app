@@ -1,24 +1,25 @@
 .bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   height: var(--statusbar-h);
   padding: 0 12px;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-subtle);
-  gap: 16px;
   flex-shrink: 0;
+  user-select: none;
 }
 
 .group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-width: 0;
 }
 
-.right {
-  margin-left: auto;
-}
+.right { gap: 10px; }
 
+/* Live/offline indicator */
 .dot {
   width: 6px;
   height: 6px;
@@ -31,37 +32,70 @@
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
-.offline {
-  background: var(--candle-down);
-}
+.offline { background: var(--candle-down); }
 
 .label {
+  font-family: var(--font-ui);
   font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.mono {
-  font-family: var(--font-mono);
   font-weight: 500;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .dim {
+  font-family: var(--font-ui);
   font-size: 11px;
-  color: var(--text-tertiary);
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
-.sep {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-
-.price {
+.sym {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 500;
-  color: var(--text-primary);
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
 }
 
-.up   { color: var(--candle-up); }
-.down { color: var(--candle-down); }
+/* Session pill — micro-label styling, colour by session. */
+.badge {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--bg-elevated);
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.rth  { color: var(--candle-up); background: var(--candle-up-dim); }
+.pre  { color: var(--gold); background: var(--gold-dim); }
+.post { color: var(--accent); background: var(--accent-glow); }
+
+.sep {
+  width: 1px;
+  height: 12px;
+  background: var(--border-subtle);
+}
+
+.clock {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.tz {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}

@@ -5,6 +5,8 @@ import styles from './SymbolSearch.module.css';
 
 interface Props {
   currentSymbol: string | null;
+  /** Venue shown as the micro-label above the symbol (listing exchange, else SMART). */
+  exchange?: string | null;
   onSelect: (result: ContractSearchResult) => void;
 }
 
@@ -16,7 +18,7 @@ const SEC_TYPE_BADGE: Record<string, string> = {
   IND: 'Index',
 };
 
-export default function SymbolSearch({ currentSymbol, onSelect }: Props) {
+export default function SymbolSearch({ currentSymbol, exchange, onSelect }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [cursor, setCursor] = useState(0);
@@ -86,12 +88,11 @@ export default function SymbolSearch({ currentSymbol, onSelect }: Props) {
 
   return (
     <div ref={containerRef} className={styles.root}>
-      <button className={styles.trigger} onClick={openSearch}>
-        <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
-          <circle cx="6.5" cy="6.5" r="5" stroke="currentColor" strokeWidth="1.5"/>
-          <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-        </svg>
-        <span className={styles.symbol}>{currentSymbol ?? 'Search symbol…'}</span>
+      <button className={styles.trigger} onClick={openSearch} title="Change symbol (/)">
+        <span className={styles.stack}>
+          <span className={styles.exchange}>{exchange || 'SMART'}</span>
+          <span className={styles.symbol}>{currentSymbol ?? 'Search…'}</span>
+        </span>
         <kbd className={styles.kbd}>/</kbd>
       </button>
 

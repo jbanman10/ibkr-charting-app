@@ -196,6 +196,10 @@ Four workspaces:
     like drawings: localStorage warm cache + durable `/api/store/theme`. `initTheme()` runs in
     `main.tsx` before render so a saved theme never flashes the default palette. Edited from the
     rail's **Settings** modal (`components/Settings/`), which is sectioned for future settings.
+  - **`lib/chartSettingsStore.ts`** — behavioural (not colour) chart settings, same persistence
+    pattern as the theme (`/api/store/chartSettings`, `initChartSettings()` in `main.tsx`). Holds
+    `candleUpdates: 'exact' | 'smooth'` — see the gotcha on IBKR's ~6s bar-report delay. Edited
+    from the Settings modal's **Charts** section.
   - `components/SideRail/` — persistent right-edge tool rail (icon buttons via a `RailItem[]`);
     extend the `railItems` array in `App.tsx` as more quick tools land. Tools: watchlist,
     RVOL scanner (`components/Scanner/`, shares the drawer slot with the watchlist — opening one
@@ -283,16 +287,50 @@ doesn't crash the dev server.
   newer); indicators and session levels both go through it. Indicators also have to be recomputed
   on `bar_update` and at the local rollover — a full recompute is ~0.04ms, so there's no reason to
   skip it — otherwise the MAs only move at `bar_close`.
+- **IBKR reports a finished 1m bar ~6s AFTER the boundary** (measured: +6.01s, +6.02s, +5.60s on
+  consecutive AAPL bars; the local clock was verified accurate to <1s). Nothing can remove that
+  delay, so `lib/chartSettingsStore.ts` exposes the choice as **`candleUpdates`**:
+  - `'exact'` (default) — ticks never touch bar OHLC and there is no local rollover, so the chart
+    shows only what IBKR has actually sent and a closed bar never shifts afterwards. This is the
+    `edce4c0` behaviour that "matches TWS by construction".
+  - `'smooth'` — tick-painted forming candle + candle opens on the minute. Responsive, but
+    everything between the boundary and IBKR's first report is provisional.
+  Ticks still arrive in BOTH modes — `checkAlertsRef`, the daily pre/post price line and the
+  watchlist depend on them; the mode gate sits *after* the alert call in `applyTick` and only
+  stops bar mutation. The mode is read live (`getChartSettings()` per tick), so toggling applies
+  without a reload; switching to `'exact'` also re-anchors immediately from `authFormingRef`
+  rather than leaving a placeholder on screen for ~6s.
+- **A `bar_update` for a minute older than `formingRef` is a CORRECTION, not the forming bar.**
+  `barUpdateRef` used to adopt any update as forming. After a local rollover the chart's newest
+  point is the fabricated bar, so `ChartContainer.updateBar` dropped the older time (`lastTimeRef`
+  guard) *while* `formingRef` had already regressed to it — which made `steps >= 2`, disabled the
+  rollover, and got every later tick repaint dropped too. The candle sat as a flat `volume: 0`
+  doji until the next `bar_close` or the 3-minute resync. Older updates now route through the
+  closed-bar path (`correctBars`) and never regress `formingRef`.
+- **Tick-derived OHLC must never enter `barsRef`.** Ticks mutate `formingRef` in place and their
+  price can be a bid/ask midpoint rather than a trade, with stale volume. `authFormingRef` keeps
+  an untouched copy of the last authoritative value for the forming minute, and the local rollover
+  writes *that* into the closed-bar history (indicators, session levels and markers consume it as
+  real history until `bar_close` lands).
 - **The clock-driven rollover pre-empts exactly ONE bar.** `applyTick` opens the next candle
   locally when the boundary passes so it appears on time; it used to jump `steps` bars ahead when
   several boundaries had passed, silently skipping every bar in between and leaving a hole until
-  the ~60s resync. It now fabricates only when `steps === 1` and otherwise waits for the feed.
+  the resync (which is **180–210s**, not the ~60s older comments claimed). It now fabricates only
+  when `steps === 1` and otherwise waits for the feed.
+- **`correctRecent` is throttled per `reqId` and is RTH-only on purpose.** The throttle used to be
+  keyed `symbol|timeframe`, so two panels on the same symbol+timeframe (a supported setup since
+  subscriptions went per-panel) suppressed each other's correction for 15s; the entry is also
+  cleared in `unsubscribe()`. Do **not** drop the RTH guard: it fetches TRADES only with no
+  BID_ASK leg, so re-emitting a pre/post bar would undo `sanitizeExtendedBars` and put the stale
+  away-from-market prints back — and adding the clamp means a second historical request per
+  rollover, which at four 1m panels (~40 per 10 min already) trips IBKR's ~60/10min pacing.
+  Extended-hours closes are corrected by the frontend's `/api/bars` re-sync, which does clamp.
 - **Live candles come from IBKR `keepUpToDate`, not aggregation.** The old 5-sec `BarAggregator`
   (+ flat-fill, reconcile, continuity, deep-resync) is gone. `keepUpToDate` keeps the *forming* bar
   correct (incl. today's daily bar — no more "aggregate today's intraday" hack) but does **not**
   retroactively fix a *closed* bar when IBKR folds in a late-reported print minutes later (common in
-  pre-market). The frontend's jittered ~60s `/api/bars` re-sync corrects closed bars (so PMH/PML
-  stay right) while keeping the live forming bar.
+  pre-market). The frontend's jittered **180–210s** `/api/bars` re-sync corrects closed bars (so
+  PMH/PML stay right) while keeping the live forming bar.
 - **Stock market data is always requested via `exchange=SMART` (consolidated tape).** A
   single-venue exchange (e.g. NASDAQ) returns that venue's prints only — penny-different
   highs/lows and gappier candles vs TWS/TV. The symbol search returns the LISTING exchange;

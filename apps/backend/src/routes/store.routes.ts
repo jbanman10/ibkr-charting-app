@@ -16,7 +16,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const DATA_DIR = process.env.DATA_DIR ?? join(process.cwd(), '.data');
-const KEYS = new Set(['drawings', 'theme']); // whitelist of persisted stores
+const KEYS = new Set(['drawings', 'theme', 'chartSettings']); // whitelist of persisted stores
 
 const fileFor = (key: string) => join(DATA_DIR, 'store', `${key}.json`);
 

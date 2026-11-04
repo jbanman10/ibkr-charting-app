@@ -20,17 +20,42 @@ import {
   type ChartTheme,
 } from '../../lib/theme';
 import { getTheme, setTheme } from '../../lib/themeStore';
+import {
+  getChartSettings,
+  setChartSettings,
+  type CandleUpdateMode,
+} from '../../lib/chartSettingsStore';
 import styles from './SettingsModal.module.css';
 
 interface Props {
   onClose: () => void;
 }
 
-type Section = 'appearance';
+type Section = 'appearance' | 'charts';
+
+const CANDLE_MODES: Array<{ id: CandleUpdateMode; label: string; blurb: string }> = [
+  {
+    id: 'exact',
+    label: 'Exact — match TWS',
+    blurb: 'Candles change only when IBKR sends data. Nothing on screen is ever '
+      + 'provisional, so a closed bar never shifts afterwards. IBKR reports a new '
+      + '1-minute bar about 6 seconds after the minute turns, so the new candle '
+      + 'appears then rather than on the boundary.',
+  },
+  {
+    id: 'smooth',
+    label: 'Smooth — sub-second',
+    blurb: 'The forming candle is painted from the live tick feed and the next '
+      + 'candle opens on the minute. Much more responsive, but everything between '
+      + 'the boundary and IBKR’s first report is a placeholder and re-anchors '
+      + 'when the official bar arrives.',
+  },
+];
 
 export default function SettingsModal({ onClose }: Props) {
   const [section, setSection] = useState<Section>('appearance');
   const [theme, setLocal] = useState<ChartTheme>(getTheme);
+  const [candleMode, setCandleMode] = useState<CandleUpdateMode>(() => getChartSettings().candleUpdates);
   const [paste, setPaste] = useState('');
   const [pasteError, setPasteError] = useState<string | null>(null);
 
@@ -120,6 +145,12 @@ export default function SettingsModal({ onClose }: Props) {
             >
               Appearance
             </button>
+            <button
+              className={`${styles.navItem} ${section === 'charts' ? styles.navActive : ''}`}
+              onClick={() => setSection('charts')}
+            >
+              Charts
+            </button>
           </nav>
 
           <div className={styles.content}>
@@ -196,6 +227,39 @@ export default function SettingsModal({ onClose }: Props) {
                   </button>
                 </section>
               </>
+            )}
+
+            {section === 'charts' && (
+              <section className={styles.group}>
+                <h4 className={styles.groupTitle}>Candle updates</h4>
+                <p className={styles.hint}>
+                  IBKR's chart feed reports a finished 1-minute bar roughly <b>6 seconds</b> after
+                  the minute turns. That delay can't be removed, so the choice is whether to show
+                  a placeholder in the meantime.
+                </p>
+                <div className={styles.modeList}>
+                  {CANDLE_MODES.map((m) => (
+                    <button
+                      key={m.id}
+                      className={`${styles.mode} ${candleMode === m.id ? styles.modeActive : ''}`}
+                      onClick={() => {
+                        setCandleMode(m.id);
+                        setChartSettings({ ...getChartSettings(), candleUpdates: m.id });
+                      }}
+                    >
+                      <span className={styles.modeHead}>
+                        <span className={styles.modeRadio} aria-hidden />
+                        {m.label}
+                      </span>
+                      <span className={styles.modeBlurb}>{m.blurb}</span>
+                    </button>
+                  ))}
+                </div>
+                <p className={styles.hint}>
+                  Applies to every chart immediately — no reload needed. Price alerts keep firing
+                  off the live tick feed in both modes.
+                </p>
+              </section>
             )}
           </div>
         </div>
