@@ -16,6 +16,7 @@
 
 import type { IChartApi } from 'lightweight-charts';
 import type { Time } from 'lightweight-charts';
+import { etParts } from './sessions';
 
 // ─── Serialisable drawing types ───────────────────────────────────────────────
 
@@ -111,6 +112,15 @@ export type Drawing =
 
 export interface PixelPoint { x: number; y: number }
 
+/**
+ * Minimal view of the price series the drawing layer needs: price↔pixel mapping
+ * plus the chart's OWN bar times, which drive time↔pixel (see timeToIndex).
+ */
+export interface DrawingSeries {
+  priceToCoordinate: (p: number) => number | null;
+  data?: () => readonly { time: Time }[];
+}
+
 /** Time extent (unix seconds) of the bars currently loaded on a panel. */
 export interface DataTimeRange { first: number; last: number }
 
@@ -135,100 +145,243 @@ export function unixToDayString(sec: number): string {
   return `${d.getUTCFullYear()}-${m}-${day}`;
 }
 
+// ─── Time ↔ pixel, via the chart's own bar index ──────────────────────────────
+//
+// timeScale().timeToCoordinate() only answers for a time that is EXACTLY a bar
+// time in the series, which is almost never true for a drawing viewed on a
+// different timeframe: a rectangle drawn at 14:43 on the 1m chart is not a 30m
+// bar time, and a daily drawing's midnight is not an intraday bar time. Every
+// such lookup used to fall through to clamping (to the left edge, or the right)
+// or to a linear interpolation that computed Number("2026-11-05") → NaN on
+// daily and weekly charts. That is why drawings "didn't translate" between
+// timeframes: both corners collapsed onto the same edge — a full-width band or
+// a zero-width sliver — or vanished entirely.
+//
+// Bar INDEX space has none of those problems. The chart's index→pixel transform
+// is exactly affine (measured: logicalToCoordinate is linear in the index with
+// slope = bar spacing), it is defined for indices outside the data — so a shape
+// reaching into the future, or off the left of the window, keeps its true size
+// instead of pinning to an edge — and it behaves identically on numeric and
+// business-day charts. So we map time → fractional bar index against the
+// series' own bar times, then index → pixel.
+
+/** Bar times of a series as unix seconds, cached per series instance. */
+interface SeriesTimes {
+  len: number;
+  first: number;
+  last: number;
+  times: number[];
+  /** Business-day chart (daily/weekly): bar times are UTC midnights of ET dates. */
+  dayBased: boolean;
+}
+const timesCache = new WeakMap<object, SeriesTimes>();
+
+function seriesTimes(series: DrawingSeries): SeriesTimes | null {
+  if (typeof series.data !== 'function') return null;
+  const data = series.data();
+  const n = data.length;
+  if (!n) return null;
+  const first = timeToUnix(data[0].time);
+  const last = timeToUnix(data[n - 1].time);
+  const hit = timesCache.get(series as unknown as object);
+  // A forming bar mutates OHLC but not its time, so (length, first, last) is a
+  // sufficient identity — it changes exactly when bars are added or re-windowed.
+  if (hit && hit.len === n && hit.first === first && hit.last === last) return hit;
+  const times = new Array<number>(n);
+  for (let i = 0; i < n; i++) times[i] = timeToUnix(data[i].time);
+  const entry: SeriesTimes = {
+    len: n, first, last, times,
+    dayBased: typeof data[0].time !== 'number',
+  };
+  timesCache.set(series as unknown as object, entry);
+  return entry;
+}
+
+/** A time that is exactly UTC midnight came from a daily/weekly (business-day) chart. */
+function isDayLevel(sec: number): boolean {
+  return Number.isFinite(sec) && sec % 86400 === 0;
+}
+
+/** UTC seconds at 00:00 ET on the given ET calendar date ("YYYY-MM-DD"). */
+function etDayStartUnix(date: string): number {
+  const base = Date.parse(`${date}T00:00:00Z`) / 1000;
+  // Probe at 12:00 UTC — inside the target ET date at either US offset — and
+  // back that day's offset out of the ET wall clock we get back (DST-safe).
+  const { minuteOfDay } = etParts(base + 12 * 3600);
+  return base + (12 * 60 - minuteOfDay) * 60;
+}
+
 /**
- * Map an absolute time to an x pixel. Within the loaded data we use the chart's
- * own converter; outside it we clamp to the chart edge (so a drawing made on a
- * different timeframe still lines up / shows partially rather than vanishing).
+ * Put a drawing's absolute time into the convention the target chart's bar
+ * times use, so a daily drawing lands on the right ET session intraday and an
+ * intraday drawing lands on the right ET day on a daily chart.
+ */
+function alignToSeries(time: number, st: SeriesTimes): number {
+  if (st.dayBased) {
+    // Daily/weekly chart. Its bar times are UTC midnight of the ET trading
+    // date, so an intraday time has to be bucketed by its ET date — reading it
+    // as a UTC date puts anything after 19:00 ET on the following day.
+    if (isDayLevel(time)) return time; // already day-level
+    return Date.parse(`${etParts(time).dateKey}T00:00:00Z`) / 1000;
+  }
+  // Intraday chart. A day-level time means "that trading day", whose ET date is
+  // its UTC date — note UTC midnight of day D is 19:00 ET on D-1, so reading it
+  // as a plain instant would put the drawing a whole session early.
+  if (isDayLevel(time)) return etDayStartUnix(unixToDayString(time));
+  return time;
+}
+
+/**
+ * Fractional bar index of an absolute time on the chart as currently loaded.
+ * Beyond either end we extrapolate at the spacing of the nearest edge, so a
+ * drawing outside the loaded window keeps its real extent and simply sits
+ * off-screen rather than being clamped onto the edge.
+ */
+function timeToIndex(series: DrawingSeries, time: number): number | null {
+  const st = seriesTimes(series);
+  if (!st) return null;
+  const { times } = st;
+  const n = times.length;
+  const t = alignToSeries(time, st);
+  if (!Number.isFinite(t)) return null;
+
+  if (t <= times[0]) {
+    const sp = n > 1 ? times[1] - times[0] : 60;
+    return sp > 0 ? (t - times[0]) / sp : 0;
+  }
+  if (t >= times[n - 1]) {
+    const sp = n > 1 ? times[n - 1] - times[n - 2] : 60;
+    return sp > 0 ? n - 1 + (t - times[n - 1]) / sp : n - 1;
+  }
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= t) lo = mid;
+    else hi = mid;
+  }
+  const span = times[hi] - times[lo];
+  return span > 0 ? lo + (t - times[lo]) / span : lo;
+}
+
+/** Inverse of timeToIndex: a fractional bar index back to an absolute time. */
+function indexToTime(series: DrawingSeries, index: number): number | null {
+  const st = seriesTimes(series);
+  if (!st) return null;
+  const { times } = st;
+  const n = times.length;
+  if (index <= 0) {
+    const sp = n > 1 ? times[1] - times[0] : 60;
+    return Math.round(times[0] + index * sp);
+  }
+  if (index >= n - 1) {
+    const sp = n > 1 ? times[n - 1] - times[n - 2] : 60;
+    return Math.round(times[n - 1] + (index - (n - 1)) * sp);
+  }
+  const lo = Math.floor(index);
+  return Math.round(times[lo] + (index - lo) * (times[lo + 1] - times[lo]));
+}
+
+/**
+ * Bar index → x pixel. logicalToCoordinate() bails out and returns 0 for a
+ * FRACTIONAL index, so take two integer probes and interpolate ourselves — the
+ * transform is exactly linear in the index (slope = bar spacing).
+ */
+function indexToX(chart: IChartApi, index: number): number | null {
+  const ts = chart.timeScale();
+  const c0 = ts.logicalToCoordinate(0 as never);
+  const c1 = ts.logicalToCoordinate(1 as never);
+  if (c0 === null || c1 === null) return null;
+  const x = c0 + index * (c1 - c0);
+  if (!Number.isFinite(x)) return null;
+  // A drawing from months ago can land a million pixels off-screen; keep the
+  // numbers in a range canvas ops stay cheap on. It is clipped either way.
+  return Math.max(-1e6, Math.min(1e6, x));
+}
+
+/** x pixel → fractional bar index. */
+function xToIndex(chart: IChartApi, x: number): number | null {
+  const ts = chart.timeScale();
+  const c0 = ts.logicalToCoordinate(0 as never);
+  const c1 = ts.logicalToCoordinate(1 as never);
+  if (c0 === null || c1 === null || c1 === c0) return null;
+  return (x - c0) / (c1 - c0);
+}
+
+/**
+ * Map an absolute time to an x pixel on the chart as currently rendered.
+ * `series` carries the bar times; without it we fall back to the chart's own
+ * exact-match converter, which only answers for a real bar time.
  */
 export function timeToX(
   chart: IChartApi,
   time: number,
-  range: DataTimeRange | null,
-  width: number
+  _range: DataTimeRange | null,
+  _width: number,
+  series?: DrawingSeries | null
 ): number | null {
+  if (series) {
+    const idx = timeToIndex(series, time);
+    if (idx !== null) {
+      const x = indexToX(chart, idx);
+      if (x !== null) return x;
+    }
+  }
   const ts = chart.timeScale();
   let c = ts.timeToCoordinate(time as Time);
-  // On a daily/weekly (business-day) chart a numeric time won't resolve directly —
-  // retry as the day it falls in so drawings line up across timeframes.
   if (c === null) c = ts.timeToCoordinate(unixToDayString(time) as unknown as Time);
-  if (c !== null) return c;
-  if (!range) return null;
-  if (time <= range.first) return 0;
-  if (time >= range.last) return width;
-  return interpolateX(chart, time); // in-range but not directly mappable
+  return c;
 }
 
 /**
- * Like timeToX, but a time beyond the last loaded bar EXTRAPOLATES at the
- * current px-per-second (measured near the right edge) instead of clamping to
- * the chart edge. Position boxes use this so a fixed-width box keeps its real
- * width when it reaches into the future, rather than visually pinning to the
- * right edge of the chart.
+ * Kept for the call sites that mean "a time past the last bar must extrapolate,
+ * not pin to the edge". timeToX does that by construction now.
  */
 export function timeToXAnchored(
   chart: IChartApi,
   time: number,
   range: DataTimeRange | null,
-  width: number
+  width: number,
+  series?: DrawingSeries | null
 ): number | null {
-  const ts = chart.timeScale();
-  const c = ts.timeToCoordinate(time as Time);
-  if (c !== null) return c;
-  if (range && time > range.last) {
-    const lastX = timeToX(chart, range.last, range, width);
-    if (lastX !== null) {
-      const probePx = 80;
-      const tProbe = ts.coordinateToTime(lastX - probePx);
-      if (tProbe !== null) {
-        const secPerPx = (range.last - timeToUnix(tProbe)) / probePx;
-        if (secPerPx > 0) return lastX + (time - range.last) / secPerPx;
-      }
-    }
-  }
-  return timeToX(chart, time, range, width);
+  return timeToX(chart, time, range, width, series);
 }
 
 /**
- * Inverse of timeToXAnchored: map an x pixel PAST the last bar back to an
- * extrapolated unix time (coordinateToTime returns null in the future
- * whitespace). Lets drags — e.g. a position's right-edge handle — reach as far
- * right as the user wants instead of snapping to the last bar.
+ * Inverse of timeToX: an x pixel back to an absolute time, including in the
+ * whitespace past the last bar (so a drag can reach as far right as the user
+ * wants). Going through index space keeps the mapping monotonic and smooth —
+ * coordinateToTime() snaps to the nearest bar, so dragging across an overnight
+ * gap used to jump the time by hours, and the old px→seconds extrapolation past
+ * the last bar could fling a drawing months away.
  */
-export function xToTimeAnchored(chart: IChartApi, x: number, range: DataTimeRange | null): number | null {
-  const ts = chart.timeScale();
-  const t = ts.coordinateToTime(x);
+export function xToTimeAnchored(
+  chart: IChartApi,
+  x: number,
+  range: DataTimeRange | null,
+  series?: DrawingSeries | null
+): number | null {
+  if (series) {
+    const idx = xToIndex(chart, x);
+    if (idx !== null) {
+      const t = indexToTime(series, idx);
+      if (t !== null) return t;
+    }
+  }
+  const t = chart.timeScale().coordinateToTime(x);
   if (t !== null) return timeToUnix(t);
-  if (!range) return null;
-  const lastX = timeToX(chart, range.last, range, Number.MAX_SAFE_INTEGER);
-  if (lastX === null || x <= lastX) return null;
-  const probePx = 80;
-  const tProbe = ts.coordinateToTime(lastX - probePx);
-  if (tProbe === null) return null;
-  const secPerPx = (range.last - timeToUnix(tProbe)) / probePx;
-  if (secPerPx <= 0) return null;
-  return Math.round(range.last + (x - lastX) * secPerPx);
+  return range ? range.last : null;
 }
 
-function interpolateX(chart: IChartApi, time: number): number | null {
-  const ts = chart.timeScale();
-  const vr = ts.getVisibleRange();
-  if (!vr) return null;
-  const fromT = Number(vr.from), toT = Number(vr.to);
-  const fromX = ts.timeToCoordinate(vr.from);
-  const toX = ts.timeToCoordinate(vr.to);
-  if (fromX === null || toX === null || toT === fromT) return null;
-  return fromX + ((time - fromT) / (toT - fromT)) * (toX - fromX);
-}
-
-/** Convert a logical drawing point to canvas pixels (clamped via range). */
+/** Convert a logical drawing point to canvas pixels. */
 export function toPixel(
   chart: IChartApi,
   point: DrawingPoint,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   range: DataTimeRange | null = null,
   width = 0
 ): PixelPoint | null {
-  const x = timeToX(chart, point.time, range, width);
+  const x = timeToX(chart, point.time, range, width, series);
   const y = series.priceToCoordinate(point.price);
   if (x === null || y === null) return null;
   return { x, y };
@@ -238,12 +391,13 @@ export function toPixel(
 export function fromPixel(
   chart: IChartApi,
   px: PixelPoint,
-  series: { coordinateToPrice: (y: number) => number | null }
+  series: DrawingSeries & { coordinateToPrice: (y: number) => number | null },
+  range: DataTimeRange | null = null
 ): DrawingPoint | null {
-  const time = chart.timeScale().coordinateToTime(px.x);
+  const time = xToTimeAnchored(chart, px.x, range, series);
   const price = series.coordinateToPrice(px.y);
   if (time === null || price === null) return null;
-  return { time: time as number, price };
+  return { time, price };
 }
 
 // ─── Callout geometry ─────────────────────────────────────────────────────────
@@ -316,12 +470,15 @@ function boxEdgeToward(box: CalloutBox, target: PixelPoint): PixelPoint {
 // ─── Hit testing ──────────────────────────────────────────────────────────────
 
 const HIT_RADIUS = 8; // px tolerance for clicking on a drawing
+/** Floor on a shape's drawn width, so a span that is sub-pixel on a coarse
+ *  timeframe still shows up instead of silently rendering as nothing. */
+const MIN_SHAPE_W = 3;
 
 export function hitTestDrawing(
   drawing: Drawing,
   px: PixelPoint,
   chart: IChartApi,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   range: DataTimeRange | null = null,
   width = 0
 ): boolean {
@@ -347,8 +504,8 @@ export function hitTestDrawing(
 
   if (drawing.type === 'position') {
     const edge = plotRight(chart, width);
-    const x1 = timeToXAnchored(chart, drawing.time1, range, edge);
-    const x2 = timeToXAnchored(chart, drawing.time2, range, edge);
+    const x1 = timeToXAnchored(chart, drawing.time1, range, edge, series);
+    const x2 = timeToXAnchored(chart, drawing.time2, range, edge, series);
     const yE = series.priceToCoordinate(drawing.entry);
     const yS = series.priceToCoordinate(drawing.stop);
     const yT = series.priceToCoordinate(drawing.target);
@@ -402,7 +559,7 @@ export function hitResizeHandle(
   drawing: Drawing,
   px: PixelPoint,
   chart: IChartApi,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   range: DataTimeRange | null,
   edge: number
 ): ResizeHandle | null {
@@ -444,8 +601,8 @@ export function hitResizeHandle(
   }
 
   if (drawing.type === 'position') {
-    const x1 = timeToXAnchored(chart, drawing.time1, range, edge);
-    const x2 = timeToXAnchored(chart, drawing.time2, range, edge);
+    const x1 = timeToXAnchored(chart, drawing.time1, range, edge, series);
+    const x2 = timeToXAnchored(chart, drawing.time2, range, edge, series);
     const yE = series.priceToCoordinate(drawing.entry);
     const yS = series.priceToCoordinate(drawing.stop);
     const yT = series.priceToCoordinate(drawing.target);
@@ -475,7 +632,7 @@ export function renderDrawings(
   ctx: CanvasRenderingContext2D,
   drawings: Drawing[],
   chart: IChartApi,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   selectedId: string | null,
   width: number,
   height: number,
@@ -531,7 +688,7 @@ export function plotRight(chart: IChartApi, width: number): number {
 function renderHLine(
   ctx: CanvasRenderingContext2D,
   d: HLineDrawing,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   width: number,
   selected: boolean
 ): void {
@@ -564,7 +721,7 @@ function renderTrendLine(
   ctx: CanvasRenderingContext2D,
   d: TrendLineDrawing,
   chart: IChartApi,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   width: number,
   height: number,
   selected: boolean,
@@ -619,7 +776,7 @@ function renderRectangle(
   ctx: CanvasRenderingContext2D,
   d: RectangleDrawing,
   chart: IChartApi,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   selected: boolean,
   width: number,
   range: DataTimeRange | null
@@ -658,7 +815,7 @@ const ALERT_DONE  = '#787b86';
 function renderAlert(
   ctx: CanvasRenderingContext2D,
   d: AlertDrawing,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   width: number,
   selected: boolean
 ): void {
@@ -687,7 +844,7 @@ function renderCallout(
   ctx: CanvasRenderingContext2D,
   d: CalloutDrawing,
   chart: IChartApi,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   selected: boolean,
   width: number,
   range: DataTimeRange | null
@@ -767,21 +924,24 @@ function renderPosition(
   ctx: CanvasRenderingContext2D,
   d: PositionDrawing,
   chart: IChartApi,
-  series: { priceToCoordinate: (p: number) => number | null },
+  series: DrawingSeries,
   selected: boolean,
   width: number,
   range: DataTimeRange | null
 ): void {
-  const x1r = timeToXAnchored(chart, d.time1, range, width);
-  const x2r = timeToXAnchored(chart, d.time2, range, width);
+  const x1r = timeToXAnchored(chart, d.time1, range, width, series);
+  const x2r = timeToXAnchored(chart, d.time2, range, width, series);
   const yE = series.priceToCoordinate(d.entry);
   const yS = series.priceToCoordinate(d.stop);
   const yT = series.priceToCoordinate(d.target);
   if (x1r === null || x2r === null || yE === null || yS === null || yT === null) return;
 
   const x = Math.min(x1r, x2r);
-  const w = Math.abs(x2r - x1r);
-  if (w < 1) return;
+  // A position is a fixed span of absolute time, so on a much coarser timeframe
+  // it is genuinely sub-pixel wide (a 20-minute plan is 0.014 of a daily bar).
+  // Drawing nothing made it look like the drawing had been lost; keep a floor
+  // so it still reads as a marker, and stays selectable.
+  const w = Math.max(Math.abs(x2r - x1r), MIN_SHAPE_W);
 
   // Reward zone (entry ↔ target) and risk zone (entry ↔ stop).
   ctx.fillStyle = 'rgba(8,153,129,0.16)';

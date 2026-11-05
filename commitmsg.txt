@@ -1,0 +1,37 @@
+Fix drawings not translating between timeframes, and giant position boxes
+
+timeScale().timeToCoordinate() only answers for a time that is EXACTLY a bar
+time in the series. A drawing viewed on another timeframe almost never is: a
+rectangle corner at 14:43 is not a 30m bar time, and a daily drawing stores
+exactly UTC midnight, which is not an intraday bar time either. Measured on
+the real drawings file, 12 of 14 corners returned null on the 30m chart.
+
+Those nulls fell through to a fallback chain that clamped a corner to the left
+or right edge, or interpolated with Number(vr.from) - which is NaN on every
+daily/weekly chart, since their visible range is "2026-11-05", not a number.
+So a rectangle became a full-width band, a zero-width sliver, or nothing; and a
+position whose left corner clamped to 0 while its right corner resolved spanned
+the entire chart.
+
+Map time to the chart's fractional BAR INDEX instead, against the series own
+times, then index to pixel. logicalToCoordinate is exactly affine in the index,
+is defined outside the loaded data (so a shape reaching into the future keeps
+its real width instead of pinning to the edge), and behaves the same on numeric
+and business-day charts. It returns 0 for a FRACTIONAL index, so the transform
+is rebuilt from two integer probes. Verified to agree with timeToCoordinate to
+<1e-6 on every real bar - a strict superset of what worked before.
+
+Also:
+- Align day-level times. UTC midnight of day D is 19:00 ET on D-1, so a daily
+  drawing read as an instant landed a whole session early; it now maps to 00:00
+  ET of that date (DST-safe, offset derived per date). Going the other way, an
+  intraday time is bucketed by its ET date, not its UTC date, which used to put
+  anything drawn after 19:00 ET on the following trading day.
+- xToTimeAnchored goes through index space too. coordinateToTime snaps to the
+  nearest bar, so dragging across an overnight gap jumped the time by hours, and
+  the old px-to-seconds extrapolation past the last bar could fling a drawing
+  months away - there are stored rectangles spanning -329 days from this.
+- Floor shape widths at MIN_SHAPE_W. A 20-minute position is 0.014 of a daily
+  bar and used to draw nothing at all, so it looked like the drawing was lost.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

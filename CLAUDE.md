@@ -138,8 +138,9 @@ Four workspaces:
     frame-synced during pan/zoom/price-scale drags. Selection uses `chart.subscribeClick`; a native
     DOM `dblclick` listener opens settings (not `chart.subscribeDblClick`, which synthetic/CDP
     events don't trigger).
-  - `lib/drawings.ts` — drawing geometry/hit-testing + pixel↔time helpers (`timeToX`, `fromPixel`,
-    `timeToUnix`, `plotRight`).
+  - `lib/drawings.ts` — drawing geometry/hit-testing + pixel↔time helpers (`timeToX`,
+    `xToTimeAnchored`, `fromPixel`, `timeToUnix`, `plotRight`). Time↔pixel goes through the
+    chart's bar index — see the gotcha; it is the reason drawings line up across timeframes.
   - **Callout (text bubble)** — `type:'callout'` holds TWO logical points: `anchor` (the spot the
     tail points at) and `bubble` (where the box sits), so it tracks its candle across pan/zoom and
     every timeframe. Box size comes from the text via `calloutBox()`, which measures on a shared
@@ -272,10 +273,33 @@ doesn't crash the dev server.
   emits all bar times as numeric unix seconds (`formatDate=2`). The frontend `toChartTime()`
   (`ChartContainer.tsx`) and `lib/indicators.ts` convert numbers to `"YYYY-MM-DD"` for daily/weekly.
   Because daily charts use business-day times, `coordinateToTime` returns a `{year,month,day}`
-  object — drawing code must run it through `timeToUnix()` (never `Number()`, which yields `NaN`),
-  and `timeToX` retries a numeric time as a `"YYYY-MM-DD"` day string so drawings line up across
-  timeframes. Historical and streaming bars must share the same numeric representation or the
+  object — drawing code must run it through `timeToUnix()` (never `Number()`, which yields `NaN`).
+  Historical and streaming bars must share the same numeric representation or the
   `findIndex(b.time === bar.time)` merge breaks and you hit "data must be asc ordered by time".
+- **Drawings map time→pixel through the chart's BAR INDEX, never `timeToCoordinate`.**
+  `timeScale().timeToCoordinate()` only answers for a time that is EXACTLY a bar time in the
+  series, which a drawing viewed on another timeframe almost never is (a 14:43 corner is not a
+  30m bar; a daily drawing's midnight is not an intraday bar). Those lookups used to fall through
+  to clamping — both corners onto the left or right edge, so a rectangle became a full-width band
+  or a zero-width sliver — or to an interpolation that computed `Number("2026-11-05")` → **NaN**
+  on every daily/weekly chart and rendered nothing. `lib/drawings.ts` now maps time → fractional
+  bar index against `series.data()`'s own times, then index → pixel: the index→pixel transform is
+  exactly affine (`logicalToCoordinate` is linear with slope = bar spacing — but it returns **0**
+  for a *fractional* index, so take two integer probes and interpolate yourself), it is defined
+  outside the loaded data, and it behaves the same on numeric and business-day charts. Verified to
+  agree with `timeToCoordinate` to <1e-6 on every real bar, so it is a strict superset.
+- **A day-level drawing time is a DATE, not an instant — align it before mapping.** A drawing made
+  on a daily chart stores exactly UTC midnight, and UTC midnight of day D is **19:00 ET on D−1**:
+  read as an instant it lands a whole session early. `alignToSeries` converts a day-level time to
+  00:00 ET of that date when the target chart is intraday (DST-safe — the offset is derived per
+  date via `etParts`, not hardcoded), and buckets an intraday time by its **ET** date when the
+  target is daily (reading it as a UTC date puts anything after 19:00 ET on the following day).
+  `unixToDayString` stays UTC on purpose: it mirrors `toChartTime()` and is what `tradeMarkers.ts`
+  uses to key markers onto daily bars.
+- **A shape whose span is sub-pixel on a coarse timeframe still has to be visible.** A 20-minute
+  position is 0.014 of a daily bar; `renderPosition` used to `return` on `w < 1` and the drawing
+  simply looked lost. Widths now have a `MIN_SHAPE_W` floor so it still reads as a marker and
+  stays selectable.
 - **Time axis is Exchange time (ET), not UTC.** Bars stay UTC epoch; only the display is converted
   via `lib/chartTime.ts` formatters wired into `CHART_OPTIONS`. Keep session logic (`lib/sessions.ts`)
   and the axis on the same ET basis.
