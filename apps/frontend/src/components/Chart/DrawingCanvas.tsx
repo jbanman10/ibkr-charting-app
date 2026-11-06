@@ -216,7 +216,7 @@ export default function DrawingCanvas({
     // instead of snapping to the last bar.
     const time: number | null = rawT !== null
       ? timeToUnix(rawT)
-      : xToTimeAnchored(chart, px.x, dataTimeRange) ?? (dataTimeRange ? dataTimeRange.last : null);
+      : xToTimeAnchored(chart, px.x, dataTimeRange, priceSeries) ?? (dataTimeRange ? dataTimeRange.last : null);
     if (time === null) return null;
     const logical: DrawingPoint = { time, price };
 

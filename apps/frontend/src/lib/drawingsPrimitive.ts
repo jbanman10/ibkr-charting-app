@@ -11,7 +11,7 @@
  */
 
 import type { IChartApi, ISeriesApi, ISeriesPrimitive, SeriesType, Time } from 'lightweight-charts';
-import type { Drawing, DataTimeRange } from './drawings';
+import type { Drawing, DataTimeRange, DrawingSeries } from './drawings';
 import { renderDrawings } from './drawings';
 
 interface MediaScope {
@@ -48,7 +48,7 @@ export class DrawingsPrimitive implements ISeriesPrimitive<Time> {
               context,
               visible,
               chart,
-              series as unknown as { priceToCoordinate: (p: number) => number | null },
+              series as unknown as DrawingSeries,
               this.selectedId,
               mediaSize.width,
               mediaSize.height,
