@@ -28,6 +28,7 @@ import StatusBar from './components/StatusBar';
 import MarketSummary from './components/MarketSummary/MarketSummary';
 import WatchlistPanel from './components/Watchlist/WatchlistPanel';
 import RvolScanner from './components/Scanner/RvolScanner';
+import DrawingsList from './components/Drawings/DrawingsList';
 import PnlCalendar from './components/PnlCalendar/PnlCalendar';
 import SettingsModal from './components/Settings/SettingsModal';
 import JournalCalendar from './components/Journal/JournalCalendar';
@@ -48,6 +49,7 @@ export default function App() {
   const [showSummary, setShowSummary] = useState(false);
   const [showWatchlist, setShowWatchlist] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const [showDrawingsList, setShowDrawingsList] = useState(false);
   const [showPnl, setShowPnl] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showJournal, setShowJournal] = useState(false);
@@ -55,6 +57,10 @@ export default function App() {
   const [captureMsg, setCaptureMsg] = useState<string | null>(null);
   // Trade-execution arrows on charts, toggled from the rail; persisted.
   const [showTrades, setShowTrades] = useState(() => localStorage.getItem('ibkr_show_trades') !== '0');
+  // Master visibility for drawings on every chart, toggled from the rail;
+  // persisted. Price alerts stay visible regardless — they are live things that
+  // quack and pop a toast, so an invisible one firing would just be confusing.
+  const [showDrawings, setShowDrawings] = useState(() => localStorage.getItem('ibkr_show_drawings') !== '0');
   const [maximizedPanelId, setMaximizedPanelId] = useState<string | null>(null);
   const layoutRef = useRef(layout);
   useEffect(() => { layoutRef.current = layout; }, [layout]);
@@ -229,12 +235,22 @@ export default function App() {
 
   // Right-edge tool rail — extend this list as more quick tools land.
   // Watchlist and scanner share the single drawer slot (opening one closes the other).
+  // Picking a drawing tool while drawings are hidden would paint something the
+  // user can't see, so reaching for a tool un-hides them.
+  const handleToolChange = useCallback((tool: DrawingToolType) => {
+    if (tool !== 'none' && !showDrawings) {
+      setShowDrawings(true);
+      try { localStorage.setItem('ibkr_show_drawings', '1'); } catch { /* quota */ }
+    }
+    setActiveTool(tool);
+  }, [showDrawings]);
+
   const railItems: RailItem[] = [
     {
       id: 'watchlist',
       title: showWatchlist ? 'Hide watchlist' : 'Show watchlist',
       active: showWatchlist,
-      onClick: () => { setShowScanner(false); setShowWatchlist((v) => !v); },
+      onClick: () => { setShowScanner(false); setShowDrawingsList(false); setShowWatchlist((v) => !v); },
       icon: (
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
@@ -245,7 +261,7 @@ export default function App() {
       id: 'scanner',
       title: showScanner ? 'Hide RVOL scanner' : 'RVOL scanner (mid/large caps)',
       active: showScanner,
-      onClick: () => { setShowWatchlist(false); setShowScanner((v) => !v); },
+      onClick: () => { setShowWatchlist(false); setShowDrawingsList(false); setShowScanner((v) => !v); },
       icon: (
         // radar/pulse icon
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -281,6 +297,50 @@ export default function App() {
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
           <path d="M5 13V5M5 5L2.8 7.2M5 5l2.2 2.2" stroke="#089981" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
           <path d="M11 3v8m0 0 2.2-2.2M11 11 8.8 8.8" stroke="#f23645" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      id: 'drawings',
+      title: 'Drawings on this symbol (list & delete)',
+      active: showDrawingsList,
+      onClick: () => {
+        setShowWatchlist(false);
+        setShowScanner(false);
+        setShowDrawingsList((v) => !v);
+      },
+      icon: (
+        // stacked lines over a baseline — a "list of shapes"
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M2.5 11.5 6 7.2l2.6 2.3L13.5 4" stroke="currentColor" strokeWidth="1.4"
+            strokeLinecap="round" strokeLinejoin="round" />
+          <rect x="2.5" y="2.6" width="5" height="3.4" rx="0.8" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M2.5 14h11" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+      ),
+    },
+    {
+      id: 'drawings-visible',
+      title: showDrawings ? 'Hide all drawings' : 'Show all drawings',
+      active: !showDrawings, // lit when something is being suppressed
+      onClick: () => setShowDrawings((v) => {
+        const next = !v;
+        try { localStorage.setItem('ibkr_show_drawings', next ? '1' : '0'); } catch { /* quota */ }
+        return next;
+      }),
+      icon: showDrawings ? (
+        // open eye
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M1.4 8S3.8 3.8 8 3.8 14.6 8 14.6 8 12.2 12.2 8 12.2 1.4 8 1.4 8Z"
+            stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+          <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.3" />
+        </svg>
+      ) : (
+        // struck-through eye
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M1.4 8S3.8 3.8 8 3.8c1 0 1.9.24 2.7.6M14.6 8s-2.4 4.2-6.6 4.2c-1 0-1.9-.24-2.7-.6"
+            stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M2.2 2.2l11.6 11.6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
         </svg>
       ),
     },
@@ -413,7 +473,7 @@ export default function App() {
                 key={panel.id}
                 panel={panel}
                 activeTool={activeTool}
-                onToolChange={setActiveTool}
+                onToolChange={handleToolChange}
                 onPanelChange={(updates) => handlePanelChange(panel.id, updates)}
                 onClose={() => {/* handled by layout switch */}}
                 canClose={false}
@@ -425,6 +485,7 @@ export default function App() {
                 isMaximized={maximizedPanelId === panel.id}
                 onToggleMaximize={() => toggleMaximize(panel.id)}
                 showTrades={showTrades}
+                showDrawings={showDrawings}
               />
             ))}
           </ResizableGrid>
@@ -436,6 +497,13 @@ export default function App() {
             focusedSymbol={focusedPanel?.symbol}
             onSelect={handleWatchlistSelect}
             onClose={() => setShowWatchlist(false)}
+          />
+        )}
+
+        {showDrawingsList && (
+          <DrawingsList
+            focusedSymbol={focusedPanel?.symbol}
+            onClose={() => setShowDrawingsList(false)}
           />
         )}
 

@@ -175,6 +175,8 @@ interface Props {
   isMaximized: boolean;
   onToggleMaximize: () => void;
   showTrades: boolean;
+  /** Master drawings visibility (rail toggle). Alerts are exempt — see below. */
+  showDrawings: boolean;
 }
 
 export default function ChartPanel({
@@ -192,6 +194,7 @@ export default function ChartPanel({
   isMaximized,
   onToggleMaximize,
   showTrades,
+  showDrawings,
 }: Props) {
   const chartRef = useRef<ChartHandle>(null);
   const barsRef = useRef<Bar[]>([]);            // closed bars — authoritative, straight from IBKR
@@ -727,8 +730,13 @@ export default function ChartPanel({
   }, []);
 
   const handleDrawingsChange = useCallback((next: Drawing[]) => {
-    setDrawings(next);
-  }, [setDrawings]);
+    if (showDrawings) { setDrawings(next); return; }
+    // Drawings are hidden, so the chart only ever received the alerts — writing
+    // its list straight back would delete every hidden shape. Keep what the
+    // chart could not see and splice the visible set over it.
+    const unseen = getDrawings(panel.symbol).filter((d) => d.type !== 'alert');
+    setDrawings([...unseen, ...next]);
+  }, [setDrawings, showDrawings, panel.symbol]);
 
   // ─── Trade execution arrows ─────────────────────────────────────────────────
   // Account fills (incl. manual TWS option orders, mapped to the underlying)
@@ -943,6 +951,23 @@ export default function ChartPanel({
   }, [selectedDrawingId, panel.symbol, setDrawings]);
 
   const selectedDrawing = drawings.find((d) => d.id === selectedDrawingId) ?? null;
+
+  // The rail's hide toggle suppresses shapes but never price alerts: an alert
+  // still quacks and pops a toast when it fires, so an invisible one would be
+  // mystery noise. Everything downstream (render, hit-testing, settings) works
+  // off this list, so a hidden drawing can't be clicked or dragged either.
+  const visibleDrawings = useMemo(
+    () => (showDrawings ? drawings : drawings.filter((d) => d.type === 'alert')),
+    [drawings, showDrawings]
+  );
+
+  // Hiding while something is selected would leave its settings card floating
+  // over a drawing that is no longer on screen.
+  useEffect(() => {
+    if (showDrawings) return;
+    setSelectedDrawingId(null);
+    setShowDrawingSettings(false);
+  }, [showDrawings]);
 
   // Indicator settings card, opened by double-clicking an MA line. Keyed by the
   // same `indicatorKey` the chart series use (daily MAs get a `-D` suffix).
@@ -1283,7 +1308,7 @@ export default function ChartPanel({
           ref={chartRef}
           timeframe={panel.timeframe}
           activeTool={isFocused ? activeTool : 'none'}
-          drawings={drawings}
+          drawings={visibleDrawings}
           bars={bars}
           selectedDrawingId={selectedDrawingId}
           onDrawingsChange={handleDrawingsChange}
