@@ -109,6 +109,19 @@ export function getDrawings(symbol: string): Drawing[] {
   return load()[symbol] ?? [];
 }
 
+/**
+ * Every symbol that currently has at least one drawing, alphabetically.
+ * The drawings list drawer needs this to offer tickers that aren't loaded in
+ * any panel — otherwise an old symbol's drawings can't be cleaned up without
+ * charting it first.
+ */
+export function getDrawingSymbols(): string[] {
+  const store = load();
+  return Object.keys(store)
+    .filter((s) => store[s]?.length)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 export function setDrawings(
   symbol: string,
   drawings: Drawing[],

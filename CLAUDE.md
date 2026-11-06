@@ -150,6 +150,23 @@ Four workspaces:
     **Dragging the body moves the bubble ONLY — the tail tip stays pinned** to what it points at
     (that's the point of a callout); re-aim the tip by dragging its own handle.
     Empty text renders a dim `Text…` placeholder so a fresh bubble is still visible and clickable.
+  - **Drawings list + master hide** (`components/Drawings/DrawingsList.tsx`) — a rail drawer that
+    lists every drawing on one symbol so it can be deleted without hunting for it on the chart
+    (a shape parked months back, or stacked under three others, is effectively unclickable). It
+    reads `drawingStore` DIRECTLY rather than a panel's props, because drawings belong to the
+    SYMBOL: `getDrawingSymbols()` feeds a switcher so a ticker that isn't loaded in any panel can
+    still be cleaned out. Deletes go through the normal setter, so they reach every panel, persist,
+    and are undoable. Shares the drawer slot with the watchlist and scanner.
+    The rail's **hide-all** toggle (`ibkr_show_drawings`, same pattern as `ibkr_show_trades`) feeds
+    `showDrawings` to every `ChartPanel`, which renders `visibleDrawings` — everything, or alerts
+    only. Two things that are easy to get wrong:
+      - **Price alerts are exempt.** They live in the drawing store but still quack and pop a toast
+        when they fire, and `checkAlertsRef` reads the store, not what's drawn — a hidden alert
+        going off would be mystery noise.
+      - **`handleDrawingsChange` must merge while hidden.** The chart only ever received the
+        alerts, so writing its list straight back would delete every hidden shape; it splices the
+        visible set over the unseen ones instead. Picking a drawing tool also un-hides, so you
+        can't paint something invisible.
   - **Drawing undo (Ctrl+Z)** — `lib/drawingStore.ts` keeps a per-symbol stack of previous drawing
     lists (in-memory, capped 60, not persisted). `setDrawings(symbol, next, { undoable: false })`
     opts out — the alert-triggered write uses it, since that's not a user edit and would otherwise
