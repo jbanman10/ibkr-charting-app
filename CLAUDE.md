@@ -433,6 +433,13 @@ doesn't crash the dev server.
 - Ask before anything that overwrites history or force-pushes.
 - `apps/desktop/release/` is gitignored (large). electron-builder's version-stamp step
   occasionally hits a transient file lock and retries — the build still completes.
+- **Releases carry BOTH installers, and both names are platform-labelled.** `artifactName` in
+  `apps/desktop/package.json` produces `IBKR-Chart-<version>-macOS-universal.dmg` and
+  `IBKR-Chart-<version>-Windows-x64.exe`. No spaces on purpose: GitHub rewrites spaces in a
+  release asset filename to dots, so the old `IBKR Chart Setup 1.0.17.exe` uploaded as
+  `IBKR.Chart.Setup.1.0.17.exe` and said nothing about the platform. CI attaches the .dmg on a
+  `v*` tag; the Windows exe is built here and uploaded by hand:
+  `gh release upload v<version> "<path>#Windows (x64 installer)"`.
 - **The macOS .dmg is built in CI, not here** — electron-builder can't produce a mac target
   from Windows (`hdiutil`/`codesign` are macOS-only). `.github/workflows/build-mac.yml` runs
   `npm run desktop:dist` on a `macos-14` runner; trigger it by hand, or push a `v*` tag to also
