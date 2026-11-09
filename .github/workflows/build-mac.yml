@@ -15,7 +15,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-14 # Apple Silicon runner; builds the universal binary
+    # macos-latest is the Apple Silicon image. Don't pin macos-14 — this
+    # account resolves that label to a runner size it can't use and the job
+    # dies in seconds with "configuration 'macos-14-arm64-us-xl' is not
+    # supported".
+    runs-on: macos-latest
     timeout-minutes: 30
 
     steps:
