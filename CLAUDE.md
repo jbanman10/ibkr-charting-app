@@ -433,6 +433,21 @@ doesn't crash the dev server.
 - Ask before anything that overwrites history or force-pushes.
 - `apps/desktop/release/` is gitignored (large). electron-builder's version-stamp step
   occasionally hits a transient file lock and retries — the build still completes.
+- **The macOS .dmg is built in CI, not here** — electron-builder can't produce a mac target
+  from Windows (`hdiutil`/`codesign` are macOS-only). `.github/workflows/build-mac.yml` runs
+  `npm run desktop:dist` on a `macos-14` runner; trigger it by hand, or push a `v*` tag to also
+  publish a GitHub Release. The same command builds it on a real Mac. The Windows exe is still
+  built by hand from `main` as above — the workflow does not touch it.
+- **A macOS build MUST be ad-hoc signed or it will not launch on Apple Silicon.** The mac
+  config sets `identity: null`, which makes electron-builder skip signing entirely; macOS then
+  kills the arm64 slice on launch (it surfaces as "the application is damaged"), because
+  repackaging invalidates the signature Electron's own binaries ship with. `afterPack` →
+  `apps/desktop/scripts/adhoc-sign.cjs` applies `codesign --sign -` and verifies it. It no-ops
+  off-darwin, so it can't affect the Windows build. The CI job re-checks both the signature and
+  `lipo -archs` and fails rather than shipping a .dmg that can't open.
+- **`scripts/make-icon.mjs` emits BOTH icons from `icon.svg`** — `build/icon.ico` for Windows and
+  a 1024px `build/icon.png` that electron-builder converts to `.icns`. Don't reach for
+  `iconutil`: it's macOS-only and would break the Windows build.
 
 ## Running / previewing
 

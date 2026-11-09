@@ -76,6 +76,14 @@ function startBackend() {
   backendProc = spawn(process.execPath, [backendEntry], {
     env: {
       ...process.env,
+      // macOS only: the backend's default HOST is 0.0.0.0, which trips the
+      // "do you want to accept incoming network connections?" firewall prompt
+      // on first launch — alarming for an unsigned app, and sometimes
+      // auto-denied, which leaves the app looking broken. Windows keeps the
+      // default. The app's own windows already load http://127.0.0.1:<port>,
+      // so loopback-only costs nothing. Spread BEFORE userCfg so a HOST the
+      // user puts in config.json still wins.
+      ...(process.platform === 'darwin' ? { HOST: '127.0.0.1' } : {}),
       ...userCfg,
       ELECTRON_RUN_AS_NODE: '1', // run the bundled backend on Electron's Node
       NODE_ENV: 'production',
@@ -160,6 +168,10 @@ function createWindow() {
 
 function buildMenu() {
   const template = [
+    // macOS promotes the FIRST template entry into the app-name menu slot, so
+    // without this the File menu would be swallowed whole and About / Services
+    // / Hide would be missing entirely. No-op on Windows and Linux.
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
     {
       label: 'File',
       submenu: [
