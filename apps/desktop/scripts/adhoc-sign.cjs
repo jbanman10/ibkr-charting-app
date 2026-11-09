@@ -26,6 +26,16 @@ const path = require('node:path');
 exports.default = async function adhocSign(context) {
   if (context.electronPlatformName !== 'darwin') return;
 
+  // A universal build packs each arch into "<outDir>-x64-temp" and
+  // "<outDir>-arm64-temp", merges them with @electron/universal, and only then
+  // produces the real bundle — and electron-builder fires afterPack for ALL
+  // THREE (platformPackager.doPack calls it unconditionally, not just for the
+  // final one). Signing the per-arch inputs before lipo merges them risks a
+  // bundle whose signature doesn't match its own contents, so only sign the
+  // combined output. Non-universal builds never create a -temp dir, so they
+  // still get signed.
+  if (path.basename(context.appOutDir).endsWith('-temp')) return;
+
   const appName = `${context.packager.appInfo.productFilename}.app`;
   const appPath = path.join(context.appOutDir, appName);
 
