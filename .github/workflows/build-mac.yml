@@ -1,0 +1,108 @@
+name: Build macOS installer
+
+# The Windows installer is still built by hand from `main` (see CLAUDE.md).
+# This job exists because electron-builder cannot produce a macOS .dmg from
+# Windows — mac targets need `hdiutil` and `codesign`, which only exist on
+# macOS. Run it manually, or push a v* tag to also publish a Release.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # needed to publish the Release on a tag
+
+jobs:
+  build:
+    runs-on: macos-14 # Apple Silicon runner; builds the universal binary
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Root install: npm workspaces. The stale nested ibkr-chart/ copy is
+      # gitignored, so CI never sees it.
+      - name: Install
+        run: npm ci
+
+      - name: Build universal .dmg
+        env:
+          # Stop electron-builder hunting the runner's keychain for a signing
+          # identity. The build is deliberately unsigned; scripts/adhoc-sign.cjs
+          # applies the ad-hoc signature that Apple Silicon requires in order to
+          # launch at all.
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        # Chains packages/types -> frontend build:app -> bundle:backend -> dist.
+        run: npm run desktop:dist
+
+      # Prove the two things that decide whether the .dmg actually works, and
+      # fail the build here rather than shipping something that can't launch.
+      - name: Verify architectures and signature
+        run: |
+          set -euo pipefail
+          APP="apps/desktop/release/mac-universal/IBKR Chart.app"
+          if [ ! -d "$APP" ]; then
+            echo "Expected app bundle not found; listing release/:"
+            ls -R apps/desktop/release | head -50
+            exit 1
+          fi
+          echo "--- architectures ---"
+          lipo -archs "$APP/Contents/MacOS/IBKR Chart"
+          lipo -archs "$APP/Contents/MacOS/IBKR Chart" | grep -q x86_64
+          lipo -archs "$APP/Contents/MacOS/IBKR Chart" | grep -q arm64
+          echo "--- signature ---"
+          codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/codesign.txt
+          if grep -q "code object is not signed at all" /tmp/codesign.txt; then
+            echo "::error::App is unsigned — it will not launch on Apple Silicon."
+            exit 1
+          fi
+          echo "--- dmg ---"
+          ls -lh apps/desktop/release/*.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mallard-macos-dmg
+          path: apps/desktop/release/*.dmg
+          if-no-files-found: error
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/desktop/release/*.dmg
+          draft: false
+          body: |
+            ## macOS
+
+            Download the `.dmg`, open it, and drag **IBKR Chart** to Applications.
+
+            The build is **not signed with an Apple Developer ID**, so macOS will
+            refuse to open it the first time. Either right-click the app and
+            choose **Open** (then confirm), or run:
+
+            ```
+            xattr -dr com.apple.quarantine "/Applications/IBKR Chart.app"
+            ```
+
+            Runs natively on both Apple Silicon and Intel.
+
+            **Before launching:** TWS or IB Gateway must already be running with
+            the API enabled. The app defaults to paper trading on port 7497. To
+            change that, edit:
+
+            ```
+            ~/Library/Application Support/@ibkr-chart/desktop/config.json
+            ```
+
+            `IBKR_PORT` — 7497 TWS paper, 7496 TWS live, 4002 Gateway paper,
+            4001 Gateway live.
+
+            ## Windows
+
+            The Windows installer is built separately and is not attached here.

@@ -98,12 +98,56 @@ TWS pops an **"Accept incoming connection?"** dialog the first time this backend
 
 ---
 
-## Installation & Running
+## Desktop app (pre-built)
+
+You don't need to build anything to just *use* the app — grab an installer from
+the [Releases page](https://github.com/jbanman10/ibkr-charting-app/releases).
+TWS or IB Gateway must already be running with the API enabled (see above)
+before you launch it.
+
+### macOS
+
+Open the `.dmg` and drag **IBKR Chart** to Applications. One universal build
+runs natively on both Apple Silicon and Intel.
+
+The app is **not signed with an Apple Developer ID**, so macOS blocks it on
+first open. Either right-click the app and choose **Open** (then confirm in the
+dialog), or clear the download quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/IBKR Chart.app"
+```
+
+Defaults are paper trading on port 7497. To point it somewhere else, edit:
+
+```
+~/Library/Application Support/@ibkr-chart/desktop/config.json
+```
+
+| `IBKR_PORT` | |
+|---|---|
+| `7497` | TWS paper *(default)* |
+| `7496` | TWS live |
+| `4002` | IB Gateway paper |
+| `4001` | IB Gateway live |
+
+`IBKR_HOST` and `IBKR_CLIENT_ID` live in the same file. Give each machine its
+own client id if more than one connects to the same TWS.
+
+### Windows
+
+Run the NSIS installer. The equivalent config file is at
+`%APPDATA%\@ibkr-chart\desktop\config.json`, and the backend logs next to it in
+`backend.log`.
+
+---
+
+## Installation & Running (from source)
 
 ```bash
 # 1. Clone and install all packages
-git clone https://github.com/yourorg/ibkr-chart.git
-cd ibkr-chart
+git clone https://github.com/jbanman10/ibkr-charting-app.git
+cd ibkr-charting-app
 npm install
 
 # 2. Configure backend
