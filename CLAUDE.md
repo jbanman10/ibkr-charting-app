@@ -433,6 +433,13 @@ doesn't crash the dev server.
 - Ask before anything that overwrites history or force-pushes.
 - `apps/desktop/release/` is gitignored (large). electron-builder's version-stamp step
   occasionally hits a transient file lock and retries — the build still completes.
+- **Releases carry BOTH installers, and both names are platform-labelled.** `artifactName` in
+  `apps/desktop/package.json` produces `IBKR-Chart-<version>-macOS-universal.dmg` and
+  `IBKR-Chart-<version>-Windows-x64.exe`. No spaces on purpose: GitHub rewrites spaces in a
+  release asset filename to dots, so the old `IBKR Chart Setup 1.0.17.exe` uploaded as
+  `IBKR.Chart.Setup.1.0.17.exe` and said nothing about the platform. CI attaches the .dmg on a
+  `v*` tag; the Windows exe is built here and uploaded by hand:
+  `gh release upload v<version> "<path>#Windows (x64 installer)"`.
 - **The macOS .dmg is built in CI, not here** — electron-builder can't produce a mac target
   from Windows (`hdiutil`/`codesign` are macOS-only). `.github/workflows/build-mac.yml` runs
   `npm run desktop:dist` on a `macos-14` runner; trigger it by hand, or push a `v*` tag to also
@@ -444,7 +451,17 @@ doesn't crash the dev server.
   repackaging invalidates the signature Electron's own binaries ship with. `afterPack` →
   `apps/desktop/scripts/adhoc-sign.cjs` applies `codesign --sign -` and verifies it. It no-ops
   off-darwin, so it can't affect the Windows build. The CI job re-checks both the signature and
-  `lipo -archs` and fails rather than shipping a .dmg that can't open.
+  `lipo -archs` and fails rather than shipping a .dmg that can't open. Verified on the runner:
+  `Signature=adhoc`, `Format=app bundle with Mach-O universal (x86_64 arm64)`.
+- **`afterPack` fires THREE times on a universal mac build, not once.** `platformPackager.doPack`
+  calls it unconditionally, and a universal build packs each arch into `<outDir>-x64-temp` /
+  `<outDir>-arm64-temp` before `@electron/universal` merges them — so the hook sees both inputs
+  and the merged bundle. Signing the inputs before `lipo` merges them risks a bundle whose
+  signature doesn't match its own contents, so `adhoc-sign.cjs` skips any `appOutDir` ending in
+  `-temp`. A non-universal build never creates one, so it still gets signed.
+- **Don't pin `macos-14` in the workflow.** This account resolves that label to
+  `macos-14-arm64-us-xl`, which it can't use — the job is cancelled after ~4s with "the
+  configuration is not supported". `macos-latest` works (currently the `macos-26-arm64` image).
 - **`scripts/make-icon.mjs` emits BOTH icons from `icon.svg`** — `build/icon.ico` for Windows and
   a 1024px `build/icon.png` that electron-builder converts to `.icns`. Don't reach for
   `iconutil`: it's macOS-only and would break the Windows build.

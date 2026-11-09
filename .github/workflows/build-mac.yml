@@ -109,4 +109,10 @@ jobs:
 
             ## Windows
 
-            The Windows installer is built separately and is not attached here.
+            Run `IBKR-Chart-<version>-Windows-x64.exe`. Config lives at
+            `%APPDATA%\@ibkr-chart\desktop\config.json`, with the backend log
+            beside it.
+
+            The Windows installer is built on a Windows machine and attached to
+            this release by hand — only the macOS build is produced by CI. If
+            it isn't listed above yet, it is still being uploaded.
