@@ -180,6 +180,24 @@ Four workspaces:
         alerts, so writing its list straight back would delete every hidden shape; it splices the
         visible set over the unseen ones instead. Picking a drawing tool also un-hides, so you
         can't paint something invisible.
+  - **Per-tool default styling** (`lib/drawingDefaultsStore.ts`) — the "Default · Save / Reset" row
+    in a drawing's settings card remembers that type's look for new drawings (turn a channel's fill
+    off, Save, and every channel after it starts unfilled). Persisted like the theme: localStorage
+    warm cache + `/api/store/drawingDefaults`, `initDrawingDefaults()` in `main.tsx`.
+    Four things that matter:
+      - **`STYLE_KEYS` is a whitelist applied in BOTH directions** — on save, so a label, a text
+        body, a price or a time can never be captured (every new trendline inheriting the last
+        one's label would be the obvious failure), and on load, so a stale file can't inject
+        fields the app no longer honours.
+      - **`extendRight` is OR-ed, not overwritten**, in `withDefaults`. Dragging a shape out to the
+        right edge is a per-drawing gesture and has to keep working when the saved default has
+        extend off.
+      - **The position tool saves its R multiple**, not colours — its zones are fixed green/red, so
+        the reward:risk is the only thing about it worth defaulting. Price alerts have nothing but
+        a price and so get no row at all.
+      - **A saved rectangle default outranks the sticky `rectColor`** in `ChartPanel` (which makes
+        new rectangles reuse the last colour you picked). Explicit beats implicit; Reset hands
+        control back to the sticky behaviour.
   - **Drawing undo (Ctrl+Z)** — `lib/drawingStore.ts` keeps a per-symbol stack of previous drawing
     lists (in-memory, capped 60, not persisted). `setDrawings(symbol, next, { undoable: false })`
     opts out — the alert-triggered write uses it, since that's not a user edit and would otherwise

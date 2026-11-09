@@ -7,8 +7,16 @@
  * per-symbol drawing store.
  */
 
+import { useEffect, useState } from 'react';
 import { RECT_PALETTE } from '../../lib/chartTheme';
 import type { Drawing } from '../../lib/drawings';
+import {
+  canHaveDefaults,
+  clearDefaultFor,
+  hasDefaultFor,
+  saveDefaultFrom,
+  styleOf,
+} from '../../lib/drawingDefaultsStore';
 import styles from './DrawingSettings.module.css';
 
 interface Props {
@@ -29,6 +37,57 @@ const TITLES: Record<Drawing['type'], string> = {
 };
 
 const WIDTHS = [1, 2, 3, 4];
+
+/**
+ * "Save as default" — remember this drawing's styling for new ones of its type.
+ *
+ * Talks to the defaults store directly rather than through props: it is a
+ * self-contained preference with no bearing on the drawing being edited, and
+ * threading four more callbacks through ChartPanel would buy nothing. Price
+ * alerts carry nothing but a price, so they get no row at all.
+ */
+function DefaultsRow({ drawing }: { drawing: Drawing }) {
+  const [saved, setSaved] = useState(() => hasDefaultFor(drawing.type));
+  const [justSaved, setJustSaved] = useState(false);
+
+  // Re-read when the card is pointed at a different drawing.
+  useEffect(() => { setSaved(hasDefaultFor(drawing.type)); setJustSaved(false); }, [drawing.id, drawing.type]);
+
+  // Confirmation is a transient label, not a toast — the button is right there.
+  useEffect(() => {
+    if (!justSaved) return;
+    const t = setTimeout(() => setJustSaved(false), 1600);
+    return () => clearTimeout(t);
+  }, [justSaved]);
+
+  if (!canHaveDefaults(drawing.type) || !styleOf(drawing)) return null;
+
+  const isPosition = drawing.type === 'position';
+  return (
+    <div className={styles.row}>
+      <span className={styles.label}>Default</span>
+      <div className={styles.btnGroup}>
+        <button
+          className={`${styles.opt} ${justSaved ? styles.optActive : ''}`}
+          onClick={() => { if (saveDefaultFrom(drawing)) { setSaved(true); setJustSaved(true); } }}
+          title={isPosition
+            ? 'New positions open at this reward:risk'
+            : 'New drawings of this type start with these settings'}
+        >
+          {justSaved ? 'Saved ✓' : 'Save'}
+        </button>
+        <button
+          className={styles.opt}
+          disabled={!saved}
+          onClick={() => { clearDefaultFor(drawing.type); setSaved(false); setJustSaved(false); }}
+          title={saved ? 'Go back to the built-in starting settings' : 'No saved default'}
+        >
+          Reset
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function hexToRgba(hex: string, alpha: number): string {
   let h = hex.replace('#', '');
@@ -186,6 +245,8 @@ export default function DrawingSettings({ drawing, onChange, onDelete, onClose }
           </div>
         </div>
 
+        <DefaultsRow drawing={drawing} />
+
         <div className={styles.footer}>
           <button className={styles.deleteBtn} onClick={onDelete}>Delete drawing</button>
         </div>
@@ -236,6 +297,7 @@ export default function DrawingSettings({ drawing, onChange, onDelete, onClose }
           <span className={styles.label}>R : R</span>
           <span className={styles.rrValue}>{rr.toFixed(2)}</span>
         </div>
+        <DefaultsRow drawing={drawing} />
         <div className={styles.footer}>
           <button className={styles.deleteBtn} onClick={onDelete}>Delete drawing</button>
         </div>
@@ -399,6 +461,8 @@ export default function DrawingSettings({ drawing, onChange, onDelete, onClose }
           </div>
         </div>
       )}
+
+      <DefaultsRow drawing={drawing} />
 
       <div className={styles.footer}>
         <button className={styles.deleteBtn} onClick={onDelete}>Delete drawing</button>
