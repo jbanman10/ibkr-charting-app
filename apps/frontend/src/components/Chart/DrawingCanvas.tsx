@@ -34,6 +34,8 @@ import {
   plotRight,
   timeToUnix,
   xToTimeAnchored,
+  channelLinePriceAt,
+  defaultChannelOffset,
   DRAWING_COLORS,
 } from '../../lib/drawings';
 
@@ -72,6 +74,9 @@ type Interaction =
 function cursorForHandle(handle: ResizeHandle, type: Drawing['type']): string {
   if (type === 'trendline') return 'move';
   if (type === 'callout') return 'move';
+  // Channel: the anchors reposition the base line, the width handle only
+  // changes how far apart the two edges sit.
+  if (type === 'channel') return handle === 'offset' ? 'ns-resize' : 'move';
   if (type === 'position') return handle === 'right' ? 'ew-resize' : 'ns-resize';
   // Rectangle corners: diagonal resize cursors.
   if (handle === 'tl' || handle === 'br') return 'nwse-resize';
@@ -103,6 +108,8 @@ export function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
       entry: d.entry + dPrice, stop: d.stop + dPrice, target: d.target + dPrice,
     };
   }
+  // trendline / rectangle / channel: shift both anchors. A channel's `offset`
+  // is a DELTA, so it is deliberately left alone — the band keeps its width.
   const shift = (p: DrawingPoint): DrawingPoint => ({ time: p.time + dTime, price: p.price + dPrice });
   return { ...d, p1: shift(d.p1), p2: shift(d.p2) } as Drawing;
 }
@@ -115,6 +122,12 @@ export function applyResize(d: Drawing, handle: ResizeHandle, logical: DrawingPo
   if (d.type === 'callout') {
     // Either end moves independently: retarget the tip, or reposition the bubble.
     return handle === 'anchor' ? { ...d, anchor: logical } : { ...d, bubble: logical };
+  }
+  if (d.type === 'channel') {
+    // The width handle sets the gap at the time it was dragged to, measured off
+    // the base edge, so the far edge lands under the pointer whatever the slope.
+    if (handle === 'offset') return { ...d, offset: logical.price - channelLinePriceAt(d, logical.time) };
+    return handle === 'p1' ? { ...d, p1: logical } : { ...d, p2: logical };
   }
   if (d.type === 'position') {
     switch (handle) {
@@ -297,6 +310,18 @@ export default function DrawingCanvas({
       };
     } else if (activeTool === 'trendline') {
       nd = { id: newDrawingId(), type: 'trendline', p1, p2, color: DRAWING_COLORS.trendline, width: 1, extended: false, extendRight };
+    } else if (activeTool === 'channel') {
+      // The drag only defines the base edge; the width is inferred from the
+      // price action it was drawn along (see defaultChannelOffset), so the
+      // channel lands already enclosing the swing. Drag the middle handle to
+      // change it.
+      nd = {
+        id: newDrawingId(), type: 'channel', p1, p2,
+        offset: defaultChannelOffset(p1, p2, bars),
+        color: DRAWING_COLORS.channel, width: 1,
+        fillColor: DRAWING_COLORS.channelFill,
+        extended: false, extendRight,
+      };
     } else {
       nd = { id: newDrawingId(), type: 'rectangle', p1, p2, borderColor: rectBorder, fillColor: rectFill, extendRight };
     }
@@ -388,7 +413,9 @@ export default function DrawingCanvas({
           ? { id: '__ghost__', type: 'callout', anchor: logical, bubble: logical, text: '', color: DRAWING_COLORS.callout, fillColor: DRAWING_COLORS.calloutFill, width: 1 }
           : activeTool === 'trendline'
             ? { id: '__ghost__', type: 'trendline', p1: logical, p2: logical, color: DRAWING_COLORS.trendline, width: 1, extended: false }
-            : { id: '__ghost__', type: 'rectangle', p1: logical, p2: logical, borderColor: rectBorder, fillColor: rectFill });
+            : activeTool === 'channel'
+              ? { id: '__ghost__', type: 'channel', p1: logical, p2: logical, offset: 0, color: DRAWING_COLORS.channel, width: 1, fillColor: DRAWING_COLORS.channelFill, extended: false }
+              : { id: '__ghost__', type: 'rectangle', p1: logical, p2: logical, borderColor: rectBorder, fillColor: rectFill });
     } else {
       // Second click (two-click fallback).
       commitCreate(firstPoint, logical, px);
@@ -418,6 +445,11 @@ export default function DrawingCanvas({
           if (!prev) return prev;
           // The callout's second point is its bubble, not a p2.
           if (prev.type === 'callout') return { ...prev, bubble: logical };
+          // The channel previews its inferred width live, so the band you see
+          // while dragging is the one you get on release.
+          if (prev.type === 'channel') {
+            return { ...prev, p2: logical, offset: defaultChannelOffset(prev.p1, logical, bars) };
+          }
           return prev.type !== 'hline' ? { ...prev, p2: logical } as Drawing : prev;
         });
       }
@@ -427,7 +459,7 @@ export default function DrawingCanvas({
     // Selection mode, not dragging: keep hover/cursor fresh so we release the
     // canvas back to pan-through the moment the pointer leaves the shape.
     if (px) setHover(computeHover(px));
-  }, [activeTool, firstPoint, inProgress, getLogical, getPixel, computeHover, chart, priceSeries]);
+  }, [activeTool, firstPoint, inProgress, bars, getLogical, getPixel, computeHover, chart, priceSeries]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     // Finish a move/resize drag: commit the live shape.

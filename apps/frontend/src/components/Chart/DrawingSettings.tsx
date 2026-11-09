@@ -20,6 +20,7 @@ interface Props {
 
 const TITLES: Record<Drawing['type'], string> = {
   trendline: 'Trend Line',
+  channel: 'Parallel Channel',
   hline: 'Horizontal Line',
   rectangle: 'Rectangle',
   position: 'Position',
@@ -249,6 +250,14 @@ export default function DrawingSettings({ drawing, onChange, onDelete, onClose }
   const setColor = (hex: string) => {
     if (drawing.type === 'rectangle') {
       onChange({ borderColor: hex, fillColor: hexToRgba(hex, 0.15) } as Partial<Drawing>);
+    } else if (drawing.type === 'channel') {
+      // Recolour the band with the edges, unless the fill was turned off —
+      // a channel whose tint keeps the old colour looks like a bug.
+      const keepUnfilled = !drawing.fillColor || drawing.fillColor === 'transparent';
+      onChange({
+        color: hex,
+        ...(keepUnfilled ? {} : { fillColor: hexToRgba(hex, 0.10) }),
+      } as Partial<Drawing>);
     } else {
       onChange({ color: hex } as Partial<Drawing>);
     }
@@ -330,6 +339,29 @@ export default function DrawingSettings({ drawing, onChange, onDelete, onClose }
           ))}
         </div>
       </div>
+
+      {/* Channel band fill */}
+      {drawing.type === 'channel' && (
+        <div className={styles.row}>
+          <span className={styles.label}>Fill</span>
+          <div className={styles.btnGroup}>
+            <button
+              className={`${styles.opt} ${drawing.fillColor && drawing.fillColor !== 'transparent' ? styles.optActive : ''}`}
+              onClick={() => onChange({ fillColor: hexToRgba(drawing.color, 0.10) } as Partial<Drawing>)}
+              title="Tint the band between the edges"
+            >
+              Tint
+            </button>
+            <button
+              className={`${styles.opt} ${!drawing.fillColor || drawing.fillColor === 'transparent' ? styles.optActive : ''}`}
+              onClick={() => onChange({ fillColor: 'transparent' } as Partial<Drawing>)}
+              title="Draw the two edges only"
+            >
+              None
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Line style (lines only) */}
       {drawing.type !== 'rectangle' && (

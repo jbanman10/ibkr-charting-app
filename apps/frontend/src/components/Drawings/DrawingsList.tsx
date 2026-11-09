@@ -36,6 +36,7 @@ interface Props {
 
 const TYPE_LABEL: Record<Drawing['type'], string> = {
   trendline: 'Trend line',
+  channel:   'Channel',
   hline:     'Horizontal',
   rectangle: 'Rectangle',
   position:  'Position',
@@ -47,6 +48,7 @@ const TYPE_LABEL: Record<Drawing['type'], string> = {
 function swatchColor(d: Drawing): string {
   switch (d.type) {
     case 'trendline': return d.color;
+    case 'channel':   return d.color;
     case 'hline':     return d.color;
     case 'rectangle': return d.borderColor;
     case 'callout':   return d.color;
@@ -64,6 +66,12 @@ const px = (n: number) => n.toFixed(2);
 function describe(d: Drawing): string {
   switch (d.type) {
     case 'trendline': return `${px(d.p1.price)} → ${px(d.p2.price)}`;
+    case 'channel': {
+      // The width is what distinguishes one channel from another at a glance;
+      // the sign says which way it opens off the drawn edge.
+      const far = d.offset >= 0 ? 'up' : 'down';
+      return `${px(d.p1.price)} → ${px(d.p2.price)} · ${px(Math.abs(d.offset))} ${far}`;
+    }
     case 'hline':     return px(d.price);
     case 'alert':     return `${px(d.price)}${d.triggeredAt ? ' · triggered' : ' · armed'}`;
     case 'rectangle': {
@@ -86,7 +94,7 @@ function describe(d: Drawing): string {
 
 /** User label, where the type supports one. */
 function labelOf(d: Drawing): string | null {
-  if (d.type === 'trendline' || d.type === 'hline' || d.type === 'rectangle') {
+  if (d.type === 'trendline' || d.type === 'channel' || d.type === 'hline' || d.type === 'rectangle') {
     return d.label?.trim() || null;
   }
   return null;

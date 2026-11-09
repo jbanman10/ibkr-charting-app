@@ -150,6 +150,19 @@ Four workspaces:
     **Dragging the body moves the bubble ONLY — the tail tip stays pinned** to what it points at
     (that's the point of a callout); re-aim the tip by dragging its own handle.
     Empty text renders a dim `Text…` placeholder so a fresh bubble is still visible and clickable.
+  - **Parallel channel** — `type:'channel'` is a trendline (`p1`/`p2`) plus a single **price
+    `offset`** for the second edge, not four free points. One number is what keeps the edges
+    genuinely parallel: drag either anchor and the far edge follows, with nothing to drift out of
+    step. The price scale is linear (no log mode here), so an equal price delta is an equal pixel
+    delta at every x — parallel in price *is* parallel on screen. `channelGeom()` is the single
+    source for render, hit-test and handles (same trick as `calloutBox`), and `lineSpan()` is
+    shared with the trendline so "extend right" means exactly the same thing for both.
+    `defaultChannelOffset()` sizes a fresh channel from the bars it was drawn across: it picks the
+    side the closes sit on and reaches the furthest wick there, so dragging along the lows lands a
+    band that already encloses the swing instead of an arbitrary width. Handles are `p1`, `p2` and
+    `offset` (midpoint of the far edge). The band interior is only clickable when it is **tinted** —
+    an unfilled channel is two lines, and grabbing the empty air between them would swallow clicks
+    meant for the candles behind it.
   - **Drawings list + master hide** (`components/Drawings/DrawingsList.tsx`) — a rail drawer that
     lists every drawing on one symbol so it can be deleted without hunting for it on the chart
     (a shape parked months back, or stacked under three others, is effectively unclickable). It
