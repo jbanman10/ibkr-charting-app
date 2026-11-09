@@ -10,17 +10,19 @@
  *
  * Drawing types supported:
  *   - TrendLine    : two anchor points, extended to chart edges
+ *   - Channel      : a trendline plus a parallel second edge
  *   - HorizontalLine: one price level, full-width
  *   - Rectangle    : two corner points
  */
 
 import type { IChartApi } from 'lightweight-charts';
 import type { Time } from 'lightweight-charts';
+import type { Bar } from '@ibkr-chart/types';
 import { etParts } from './sessions';
 
 // ─── Serialisable drawing types ───────────────────────────────────────────────
 
-export type DrawingToolType = 'trendline' | 'hline' | 'rectangle' | 'position' | 'callout' | 'none';
+export type DrawingToolType = 'trendline' | 'channel' | 'hline' | 'rectangle' | 'position' | 'callout' | 'none';
 
 export interface DrawingPoint {
   time: number;   // Unix seconds
@@ -38,6 +40,34 @@ export interface TrendLineDrawing {
   extended: boolean;     // extend both directions to the chart edges
   extendRight?: boolean; // extend only the right edge to the chart edge (and beyond)
   label?: string;        // free text, drawn as a chip at the line's right end
+}
+
+/**
+ * Parallel channel — TradingView's "Parallel Channel": a trendline plus a
+ * second edge running parallel to it.
+ *
+ * The second edge is stored as a single PRICE OFFSET from the base line rather
+ * than as two more points. That is what keeps the two edges genuinely parallel:
+ * drag either base anchor and the far edge follows, with no way for the two to
+ * drift out of parallel through rounding or independent editing. The price
+ * scale is linear (no log mode in this app), so an equal price delta is an
+ * equal pixel delta at every x — the edges are parallel on screen too.
+ *
+ * `offset` is signed: positive puts the second edge above the base line.
+ */
+export interface ChannelDrawing {
+  id: string;
+  type: 'channel';
+  p1: DrawingPoint;
+  p2: DrawingPoint;
+  offset: number;        // price delta from the base edge to the parallel edge
+  color: string;
+  width: number;
+  dashed?: boolean;
+  fillColor?: string;    // band tint; absent or 'transparent' = unfilled
+  extended?: boolean;    // extend both edges both directions
+  extendRight?: boolean; // extend both edges to the right chart edge
+  label?: string;        // free text, drawn as a chip at the right end
 }
 
 export interface HLineDrawing {
@@ -102,6 +132,7 @@ export interface CalloutDrawing {
 
 export type Drawing =
   | TrendLineDrawing
+  | ChannelDrawing
   | HLineDrawing
   | RectangleDrawing
   | PositionDrawing
@@ -467,6 +498,118 @@ function boxEdgeToward(box: CalloutBox, target: PixelPoint): PixelPoint {
   return { x: cx + dx * s, y: cy + dy * s };
 }
 
+// ─── Channel geometry ─────────────────────────────────────────────────────────
+
+/** A line segment in pixels, after any extend-left/right has been applied. */
+export interface LineSpan { x1: number; y1: number; x2: number; y2: number }
+
+/**
+ * The segment a two-point line actually occupies on screen. Shared by the
+ * trendline and the channel so "extend right" means exactly the same thing for
+ * both. A vertical line (infinite slope) can't be extended, so it is returned
+ * as drawn.
+ */
+function lineSpan(
+  a: PixelPoint,
+  b: PixelPoint,
+  extended: boolean,
+  extendRight: boolean,
+  width: number
+): LineSpan {
+  const slope = b.x === a.x ? Infinity : (b.y - a.y) / (b.x - a.x);
+  if (extended && isFinite(slope)) {
+    return { x1: 0, y1: a.y - slope * a.x, x2: width, y2: a.y + slope * (width - a.x) };
+  }
+  if (extendRight && isFinite(slope)) {
+    const left = a.x <= b.x ? a : b;
+    return { x1: left.x, y1: left.y, x2: width, y2: left.y + slope * (width - left.x) };
+  }
+  return { x1: a.x, y1: a.y, x2: b.x, y2: b.y };
+}
+
+export interface ChannelGeom {
+  span: LineSpan;  // base edge, as drawn
+  dy: number;      // pixel delta from the base edge to the parallel edge
+  a: PixelPoint;   // p1 anchor (handle position)
+  b: PixelPoint;   // p2 anchor (handle position)
+}
+
+/**
+ * Everything needed to draw, hit-test or grab a channel, in one place — so the
+ * three can't disagree about where its edges are (the same reason
+ * `calloutBox` is shared). `width` is the plot-area right edge.
+ */
+export function channelGeom(
+  d: ChannelDrawing,
+  chart: IChartApi,
+  series: DrawingSeries,
+  range: DataTimeRange | null,
+  width: number
+): ChannelGeom | null {
+  const a = toPixel(chart, d.p1, series, range, width);
+  const b = toPixel(chart, d.p2, series, range, width);
+  if (!a || !b) return null;
+  // The offset is converted to pixels once, at p1. On a linear price scale that
+  // delta holds at every x, which is what makes the edges parallel on screen.
+  const yOff = series.priceToCoordinate(d.p1.price + d.offset);
+  if (yOff === null) return null;
+  return { span: lineSpan(a, b, !!d.extended, !!d.extendRight, width), dy: yOff - a.y, a, b };
+}
+
+/** Price on the channel's BASE edge at `time`, interpolated through p1/p2. */
+export function channelLinePriceAt(d: { p1: DrawingPoint; p2: DrawingPoint }, time: number): number {
+  const dt = d.p2.time - d.p1.time;
+  if (dt === 0) return d.p1.price;
+  return d.p1.price + (d.p2.price - d.p1.price) * ((time - d.p1.time) / dt);
+}
+
+/**
+ * A sensible channel width for a freshly drawn base line.
+ *
+ * A channel is almost always drawn along one side of a swing — connect the
+ * lows and you want the band to open upward, connect the highs and you want it
+ * to open down. So: decide the side by where the closes sit relative to the
+ * line, then make the offset just large enough to reach the furthest bar on
+ * that side. The result encloses the move you drew along, instead of being an
+ * arbitrary width you then have to drag.
+ *
+ * Falls back to the line's own price span (then 1%) when no bars cover it.
+ */
+export function defaultChannelOffset(p1: DrawingPoint, p2: DrawingPoint, bars: Bar[]): number {
+  const lo = Math.min(p1.time, p2.time);
+  const hi = Math.max(p1.time, p2.time);
+  const span = bars.filter((b) => {
+    const t = Number(b.time);
+    return t >= lo && t <= hi;
+  });
+
+  if (!span.length) {
+    const fallback = Math.abs(p2.price - p1.price);
+    return fallback > 0 ? fallback : Math.max(Math.abs(p1.price) * 0.01, 1e-6);
+  }
+
+  const lineAt = (t: number) => channelLinePriceAt({ p1, p2 }, t);
+
+  // Which side of the line is the price action on?
+  let above = 0;
+  for (const b of span) if (Number(b.close) >= lineAt(Number(b.time))) above++;
+  const up = above * 2 >= span.length;
+
+  // Reach the furthest wick on that side.
+  let reach = 0;
+  for (const b of span) {
+    const line = lineAt(Number(b.time));
+    const d = up ? Number(b.high) - line : line - Number(b.low);
+    if (d > reach) reach = d;
+  }
+
+  // Floor at the average bar range so a line drawn straight through the action
+  // (reach ≈ 0) still produces a visible band.
+  const avgRange = span.reduce((acc, b) => acc + (Number(b.high) - Number(b.low)), 0) / span.length;
+  const mag = Math.max(reach, avgRange, Math.abs(p1.price) * 0.001, 1e-6);
+  return up ? mag : -mag;
+}
+
 // ─── Hit testing ──────────────────────────────────────────────────────────────
 
 const HIT_RADIUS = 8; // px tolerance for clicking on a drawing
@@ -516,6 +659,32 @@ export function hitTestDrawing(
         && px.y >= minY && px.y <= maxY;
   }
 
+  if (drawing.type === 'channel') {
+    const edge = plotRight(chart, width);
+    const g = channelGeom(drawing, chart, series, range, edge);
+    if (!g) return false;
+    const { span, dy } = g;
+
+    // Either edge counts.
+    const base1 = { x: span.x1, y: span.y1 };
+    const base2 = { x: span.x2, y: span.y2 };
+    if (distToSegment(px, base1, base2) < HIT_RADIUS) return true;
+    if (distToSegment(px, { x: span.x1, y: span.y1 + dy }, { x: span.x2, y: span.y2 + dy }) < HIT_RADIUS) return true;
+
+    // So does the band interior, but only when it's actually tinted — an
+    // unfilled channel is two lines, and grabbing the empty air between them
+    // would swallow clicks meant for the candles behind it.
+    const filled = !!drawing.fillColor && drawing.fillColor !== 'transparent';
+    if (!filled) return false;
+    const xa = Math.min(span.x1, span.x2);
+    const xb = Math.max(span.x1, span.x2);
+    if (px.x < xa - HIT_RADIUS || px.x > xb + HIT_RADIUS) return false;
+    const t = span.x2 === span.x1 ? 0 : (px.x - span.x1) / (span.x2 - span.x1);
+    const yBase = span.y1 + t * (span.y2 - span.y1);
+    const yOther = yBase + dy;
+    return px.y >= Math.min(yBase, yOther) && px.y <= Math.max(yBase, yOther);
+  }
+
   if (drawing.type === 'trendline' || drawing.type === 'rectangle') {
     const edge = plotRight(chart, width);
     const a = toPixel(chart, drawing.p1, series, range, edge);
@@ -546,7 +715,8 @@ export function hitTestDrawing(
 export type ResizeHandle =
   | 'p1' | 'p2' | 'tl' | 'tr' | 'bl' | 'br'
   | 'entry' | 'stop' | 'target' | 'right'
-  | 'anchor' | 'bubble';
+  | 'anchor' | 'bubble'
+  | 'offset'; // channel: the parallel edge's width handle
 
 const HANDLE_HIT = 9; // px tolerance for grabbing a resize handle
 
@@ -570,6 +740,16 @@ export function hitResizeHandle(
     const b = toPixel(chart, drawing.p2, series, range, edge);
     if (a && near(a.x, a.y)) return 'p1';
     if (b && near(b.x, b.y)) return 'p2';
+    return null;
+  }
+
+  if (drawing.type === 'channel') {
+    const g = channelGeom(drawing, chart, series, range, edge);
+    if (!g) return null;
+    if (near(g.a.x, g.a.y)) return 'p1';
+    if (near(g.b.x, g.b.y)) return 'p2';
+    // Width handle: midway along the parallel edge, between the two anchors.
+    if (near((g.a.x + g.b.x) / 2, (g.a.y + g.b.y) / 2 + g.dy)) return 'offset';
     return null;
   }
 
@@ -662,6 +842,8 @@ export function renderDrawings(
       renderHLine(ctx, d, series, rightEdge, isSelected);
     } else if (d.type === 'trendline') {
       renderTrendLine(ctx, d, chart, series, rightEdge, height, isSelected, range);
+    } else if (d.type === 'channel') {
+      renderChannel(ctx, d, chart, series, rightEdge, isSelected, range);
     } else if (d.type === 'rectangle') {
       renderRectangle(ctx, d, chart, series, isSelected, rightEdge, range);
     } else if (d.type === 'position') {
@@ -731,22 +913,8 @@ function renderTrendLine(
   const b = toPixel(chart, d.p2, series, range, width);
   if (!a || !b) return;
 
-  let startX = a.x, startY = a.y, endX = b.x, endY = b.y;
-  const slope = b.x === a.x ? Infinity : (b.y - a.y) / (b.x - a.x);
-
-  if (d.extended && isFinite(slope)) {
-    // Extend line to both canvas edges
-    startX = 0;
-    startY = a.y - slope * a.x;
-    endX = width;
-    endY = a.y + slope * (width - a.x);
-  } else if (d.extendRight && isFinite(slope)) {
-    // Keep the left anchor, extend the right end to the chart edge.
-    const left = a.x <= b.x ? a : b;
-    startX = left.x; startY = left.y;
-    endX = width;
-    endY = left.y + slope * (width - left.x);
-  }
+  const { x1: startX, y1: startY, x2: endX, y2: endY } =
+    lineSpan(a, b, d.extended, !!d.extendRight, width);
 
   ctx.strokeStyle = d.color;
   ctx.lineWidth = selected ? d.width + 1 : d.width;
@@ -769,6 +937,58 @@ function renderTrendLine(
   if (selected) {
     drawHandle(ctx, a.x, a.y, d.color);
     drawHandle(ctx, b.x, b.y, d.color);
+  }
+}
+
+function renderChannel(
+  ctx: CanvasRenderingContext2D,
+  d: ChannelDrawing,
+  chart: IChartApi,
+  series: DrawingSeries,
+  width: number,
+  selected: boolean,
+  range: DataTimeRange | null
+): void {
+  const g = channelGeom(d, chart, series, range, width);
+  if (!g) return;
+  const { span, dy } = g;
+
+  // Band first, so the edges draw on top of their own tint.
+  if (d.fillColor && d.fillColor !== 'transparent') {
+    ctx.fillStyle = d.fillColor;
+    ctx.beginPath();
+    ctx.moveTo(span.x1, span.y1);
+    ctx.lineTo(span.x2, span.y2);
+    ctx.lineTo(span.x2, span.y2 + dy);
+    ctx.lineTo(span.x1, span.y1 + dy);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.strokeStyle = d.color;
+  ctx.lineWidth = selected ? d.width + 1 : d.width;
+  if (d.dashed) ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  ctx.moveTo(span.x1, span.y1);
+  ctx.lineTo(span.x2, span.y2);
+  ctx.moveTo(span.x1, span.y1 + dy);
+  ctx.lineTo(span.x2, span.y2 + dy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Label above whichever edge is the upper one at the line's right end.
+  if (d.label) {
+    const rightIsEnd = span.x2 >= span.x1;
+    const lx = rightIsEnd ? span.x2 : span.x1;
+    const ly = (rightIsEnd ? span.y2 : span.y1) + Math.min(0, dy);
+    drawLabelChip(ctx, d.label, Math.min(lx, width - 4), ly - 11, d.color, 'right');
+  }
+
+  if (selected) {
+    drawHandle(ctx, g.a.x, g.a.y, d.color);
+    drawHandle(ctx, g.b.x, g.b.y, d.color);
+    // Width handle on the parallel edge — the only way to change the band's size.
+    drawHandle(ctx, (g.a.x + g.b.x) / 2, (g.a.y + g.b.y) / 2 + dy, d.color);
   }
 }
 
@@ -1051,6 +1271,8 @@ export function newDrawingId(): string {
 // ─── Color constants (duplicated from chartTheme to avoid circular deps) ──────
 export const DRAWING_COLORS = {
   trendline:  '#3d7eff',
+  channel:      '#3d7eff',
+  channelFill:  'rgba(61,126,255,0.10)', // lighter than a rectangle: a channel is usually large
   hline:      '#f0b429',
   rectangle:  'rgba(61,126,255,0.15)',
   rectBorder: '#3d7eff',

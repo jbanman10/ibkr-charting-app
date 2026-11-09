@@ -108,7 +108,8 @@ export const SESSION_COLORS = {
   prevDayHigh:  '#089981', // prev day high — solid green
   prevDayLow:   '#f23645', // prev day low — solid red
   premarket:    '#22d3ee', // pre-market high/low — cyan
-  openingRange: '#c084fc', // first-5min high/low — purple
+  openingRange:   '#c084fc', // first-5min high/low — purple
+  openingRange15: '#f472b6', // first-15min high/low — pink (distinct from the 5m pair)
   shadePre:     'rgba(56,189,248,0.06)',  // pre-market background tint (cool)
   shadePost:    'rgba(168,85,247,0.06)',  // post-market background tint (violet)
   // Live extended-hours price on the daily chart (TradingView's Pre/Post line).

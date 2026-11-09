@@ -29,6 +29,20 @@ const TOOLS: Tool[] = [
     ),
   },
   {
+    type: 'channel',
+    label: 'Chan',
+    title: 'Parallel Channel (drag the base edge along the highs or lows; drag the middle handle to set the width)',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M2 10.5 12 4.5v3.5L2 14z" fill="rgba(61,126,255,0.18)" stroke="none"/>
+        <line x1="2" y1="10.5" x2="12" y2="4.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+        <line x1="2" y1="13" x2="12" y2="7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"/>
+        <circle cx="2" cy="10.5" r="1.4" fill="currentColor"/>
+        <circle cx="12" cy="4.5" r="1.4" fill="currentColor"/>
+      </svg>
+    ),
+  },
+  {
     type: 'hline',
     label: 'HL',
     title: 'Horizontal Line (click once)',

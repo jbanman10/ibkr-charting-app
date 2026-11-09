@@ -129,6 +129,9 @@ export const GRID_PRESETS: Record<GridPresetId, GridPreset> = {
 
 export interface SessionOverlays {
   openingRange: boolean; // first-5min high & low
+  // First-15min high & low. Optional for the same reason as extendedPrice:
+  // panels saved before it existed must read as ON, not off.
+  openingRange15?: boolean;
   prevDayHL: boolean;    // previous day high & low
   premarketHL: boolean;  // pre-market high & low
   shading: boolean;      // pre/post-market background tint
@@ -140,13 +143,14 @@ export interface SessionOverlays {
 
 export const DEFAULT_SESSION_OVERLAYS: SessionOverlays = {
   openingRange: true,
+  openingRange15: true,
   prevDayHL: true,
   premarketHL: true,
   shading: true,
   extendedPrice: true,
 };
 
-/** Style overrides for one session level line (PDH/PDL/PMH/PML/ORH/ORL). */
+/** Style overrides for one session level line (PDH/PDL/PMH/PML/ORH/ORL/OR15H/OR15L). */
 export interface SessionLevelStyle {
   color?: string;
   lineWidth?: number; // 1–4

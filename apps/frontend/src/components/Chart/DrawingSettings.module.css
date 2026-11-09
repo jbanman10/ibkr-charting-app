@@ -12,6 +12,12 @@
   z-index: 40;
   padding: 10px 12px;
   animation: fadeUp 0.16s var(--ease-out) both;
+  /* A 2x2 grid in a small window leaves a panel ~240px tall, which is shorter
+     than this card once a type has several rows — without a bound it simply
+     ran off the bottom and the Delete button was unreachable. Scroll inside
+     the panel instead. 56px = the 44px top offset plus a little breathing room. */
+  max-height: calc(100% - 56px);
+  overflow-y: auto;
 }
 
 .header {
@@ -130,6 +136,8 @@
 
 .opt:hover { color: var(--text-primary); border-color: var(--border-muted); }
 .optActive { color: var(--accent); border-color: var(--accent); background: var(--accent-glow); }
+.opt:disabled { opacity: 0.4; cursor: default; }
+.opt:disabled:hover { color: var(--text-secondary); border-color: var(--border-subtle); }
 
 .widthPreview {
   display: block;

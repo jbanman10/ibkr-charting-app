@@ -150,6 +150,19 @@ Four workspaces:
     **Dragging the body moves the bubble ONLY — the tail tip stays pinned** to what it points at
     (that's the point of a callout); re-aim the tip by dragging its own handle.
     Empty text renders a dim `Text…` placeholder so a fresh bubble is still visible and clickable.
+  - **Parallel channel** — `type:'channel'` is a trendline (`p1`/`p2`) plus a single **price
+    `offset`** for the second edge, not four free points. One number is what keeps the edges
+    genuinely parallel: drag either anchor and the far edge follows, with nothing to drift out of
+    step. The price scale is linear (no log mode here), so an equal price delta is an equal pixel
+    delta at every x — parallel in price *is* parallel on screen. `channelGeom()` is the single
+    source for render, hit-test and handles (same trick as `calloutBox`), and `lineSpan()` is
+    shared with the trendline so "extend right" means exactly the same thing for both.
+    `defaultChannelOffset()` sizes a fresh channel from the bars it was drawn across: it picks the
+    side the closes sit on and reaches the furthest wick there, so dragging along the lows lands a
+    band that already encloses the swing instead of an arbitrary width. Handles are `p1`, `p2` and
+    `offset` (midpoint of the far edge). The band interior is only clickable when it is **tinted** —
+    an unfilled channel is two lines, and grabbing the empty air between them would swallow clicks
+    meant for the candles behind it.
   - **Drawings list + master hide** (`components/Drawings/DrawingsList.tsx`) — a rail drawer that
     lists every drawing on one symbol so it can be deleted without hunting for it on the chart
     (a shape parked months back, or stacked under three others, is effectively unclickable). It
@@ -167,6 +180,24 @@ Four workspaces:
         alerts, so writing its list straight back would delete every hidden shape; it splices the
         visible set over the unseen ones instead. Picking a drawing tool also un-hides, so you
         can't paint something invisible.
+  - **Per-tool default styling** (`lib/drawingDefaultsStore.ts`) — the "Default · Save / Reset" row
+    in a drawing's settings card remembers that type's look for new drawings (turn a channel's fill
+    off, Save, and every channel after it starts unfilled). Persisted like the theme: localStorage
+    warm cache + `/api/store/drawingDefaults`, `initDrawingDefaults()` in `main.tsx`.
+    Four things that matter:
+      - **`STYLE_KEYS` is a whitelist applied in BOTH directions** — on save, so a label, a text
+        body, a price or a time can never be captured (every new trendline inheriting the last
+        one's label would be the obvious failure), and on load, so a stale file can't inject
+        fields the app no longer honours.
+      - **`extendRight` is OR-ed, not overwritten**, in `withDefaults`. Dragging a shape out to the
+        right edge is a per-drawing gesture and has to keep working when the saved default has
+        extend off.
+      - **The position tool saves its R multiple**, not colours — its zones are fixed green/red, so
+        the reward:risk is the only thing about it worth defaulting. Price alerts have nothing but
+        a price and so get no row at all.
+      - **A saved rectangle default outranks the sticky `rectColor`** in `ChartPanel` (which makes
+        new rectangles reuse the last colour you picked). Explicit beats implicit; Reset hands
+        control back to the sticky behaviour.
   - **Drawing undo (Ctrl+Z)** — `lib/drawingStore.ts` keeps a per-symbol stack of previous drawing
     lists (in-memory, capped 60, not persisted). `setDrawings(symbol, next, { undoable: false })`
     opts out — the alert-triggered write uses it, since that's not a user edit and would otherwise
@@ -176,6 +207,11 @@ Four workspaces:
   - `lib/sessions.ts` + `lib/sessionShadingPrimitive.ts` — ET session math (opening range,
     prev-day H/L, pre-market H/L) and the pre/post-market background tint primitive.
     `currentSession()` reports the session the wall clock is in (weekends → `closed`).
+    **Two opening ranges**: 5m (`ORH`/`ORL`, purple) and 15m (`OR15H`/`OR15L`, pink), toggled
+    independently (`openingRange` / `openingRange15`). A bar joins a window by where it **starts**,
+    so on a timeframe coarser than the window — a 5m range on a 30m chart — the single 09:30 bar
+    satisfies both and the two pairs land on identical prices. That is the pre-existing 5m
+    behaviour, deliberately left alone; read the levels on a timeframe at or below the window.
   - **Pre/post price on the daily chart** — a daily candle closes at the 16:00 RTH close, so
     outside regular hours the live price is nowhere on a daily chart. `buildExtendedPriceLine`
     (ChartPanel) emits it as a dotted price line via the existing `setSessionLevels` channel —

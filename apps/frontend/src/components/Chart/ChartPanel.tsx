@@ -86,8 +86,10 @@ const LEVEL_META: Record<string, {
   PDL: { title: 'Prev Day Low',       color: SESSION_COLORS.prevDayLow,   dashed: false, group: 'prevDayHL' },
   PMH: { title: 'Pre-market High',    color: SESSION_COLORS.premarket,    dashed: true,  group: 'premarketHL' },
   PML: { title: 'Pre-market Low',     color: SESSION_COLORS.premarket,    dashed: true,  group: 'premarketHL' },
-  ORH: { title: 'Opening Range High', color: SESSION_COLORS.openingRange, dashed: true,  group: 'openingRange' },
-  ORL: { title: 'Opening Range Low',  color: SESSION_COLORS.openingRange, dashed: true,  group: 'openingRange' },
+  ORH: { title: 'Opening Range High (5m)',  color: SESSION_COLORS.openingRange,   dashed: true,  group: 'openingRange' },
+  ORL: { title: 'Opening Range Low (5m)',   color: SESSION_COLORS.openingRange,   dashed: true,  group: 'openingRange' },
+  OR15H: { title: 'Opening Range High (15m)', color: SESSION_COLORS.openingRange15, dashed: true,  group: 'openingRange15' },
+  OR15L: { title: 'Opening Range Low (15m)',  color: SESSION_COLORS.openingRange15, dashed: true,  group: 'openingRange15' },
 };
 
 function buildSessionLines(
@@ -120,6 +122,12 @@ function buildSessionLines(
   if (ov.openingRange) {
     push('ORH', levels.orHigh);
     push('ORL', levels.orLow);
+  }
+  // Added after panels were already being saved, so absent reads as ON (same
+  // rule as extendedPrice) — only an explicit false hides it.
+  if (ov.openingRange15 !== false) {
+    push('OR15H', levels.or15High);
+    push('OR15L', levels.or15Low);
   }
   return out;
 }
