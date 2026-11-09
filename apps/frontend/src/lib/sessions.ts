@@ -22,6 +22,8 @@ export interface SessionLevels {
   premarketLow: number | null;
   orHigh: number | null;
   orLow: number | null;
+  or15High: number | null;
+  or15Low: number | null;
 }
 
 export interface SessionRegion {
@@ -30,7 +32,10 @@ export interface SessionRegion {
   kind: 'pre' | 'post';
 }
 
-const OR_MINUTES = 5; // opening range length
+// Opening-range window lengths, in minutes from the 09:30 ET open. Both are
+// derived from the same bars, so a chart can show either or both.
+const OR_MINUTES = 5;
+const OR15_MINUTES = 15;
 
 const etFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/New_York',
@@ -101,6 +106,7 @@ export function computeSessionLevels(bars: Bar[]): SessionLevels {
     prevDayHigh: null, prevDayLow: null,
     premarketHigh: null, premarketLow: null,
     orHigh: null, orLow: null,
+    or15High: null, or15Low: null,
   };
   if (!bars.length) return empty;
 
@@ -126,9 +132,17 @@ export function computeSessionLevels(bars: Bar[]): SessionLevels {
 
   const prevRth = prevBars.filter((b) => b.kind === 'rth').map((b) => b.bar);
   const todayPre = todayBars.filter((b) => b.kind === 'pre').map((b) => b.bar);
-  const todayOr = todayBars
-    .filter((b) => b.kind === 'rth' && b.min >= 570 && b.min < 570 + OR_MINUTES)
+  // Bars whose ET start falls inside the first `mins` minutes of the regular
+  // session. NOTE: a bar is included by where it STARTS, so on a timeframe
+  // coarser than the window (a 5m range on a 30m chart) the single 09:30 bar
+  // covers the whole window and both OR pairs collapse onto the same prices.
+  // That is the pre-existing behaviour of the 5m range and is left as is —
+  // read the levels on a timeframe at or below the window length.
+  const orBars = (mins: number) => todayBars
+    .filter((b) => b.kind === 'rth' && b.min >= 570 && b.min < 570 + mins)
     .map((b) => b.bar);
+  const todayOr = orBars(OR_MINUTES);
+  const todayOr15 = orBars(OR15_MINUTES);
 
   return {
     prevDayHigh: hi(prevRth),
@@ -137,6 +151,8 @@ export function computeSessionLevels(bars: Bar[]): SessionLevels {
     premarketLow: lo(todayPre),
     orHigh: hi(todayOr),
     orLow: lo(todayOr),
+    or15High: hi(todayOr15),
+    or15Low: lo(todayOr15),
   };
 }
 

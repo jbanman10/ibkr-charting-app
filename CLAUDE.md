@@ -176,6 +176,11 @@ Four workspaces:
   - `lib/sessions.ts` + `lib/sessionShadingPrimitive.ts` — ET session math (opening range,
     prev-day H/L, pre-market H/L) and the pre/post-market background tint primitive.
     `currentSession()` reports the session the wall clock is in (weekends → `closed`).
+    **Two opening ranges**: 5m (`ORH`/`ORL`, purple) and 15m (`OR15H`/`OR15L`, pink), toggled
+    independently (`openingRange` / `openingRange15`). A bar joins a window by where it **starts**,
+    so on a timeframe coarser than the window — a 5m range on a 30m chart — the single 09:30 bar
+    satisfies both and the two pairs land on identical prices. That is the pre-existing 5m
+    behaviour, deliberately left alone; read the levels on a timeframe at or below the window.
   - **Pre/post price on the daily chart** — a daily candle closes at the 16:00 RTH close, so
     outside regular hours the live price is nowhere on a daily chart. `buildExtendedPriceLine`
     (ChartPanel) emits it as a dotted price line via the existing `setSessionLevels` channel —
