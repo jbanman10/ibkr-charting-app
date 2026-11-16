@@ -5,7 +5,8 @@ import type { Drawing, DataTimeRange } from '../../lib/drawings';
 import type { DrawingToolType } from './DrawingCanvas';
 import { useSymbolDrawings } from '../../hooks/useSymbolDrawings';
 import { seedDrawings, getDrawings } from '../../lib/drawingStore';
-import { newDrawingId, unixToDayString } from '../../lib/drawings';
+import { newDrawingId, unixToDayString, cloneDrawing, translateDrawingTo } from '../../lib/drawings';
+import { copyDrawing, readClipboard } from '../../lib/drawingClipboard';
 import { ensureAudio, playQuack, shouldFire } from '../../lib/quack';
 import { getExecutions, subscribeExecutions } from '../../lib/executionStore';
 import { getActiveTrade, subscribeJournal, setActiveTrade } from '../../lib/journalStore';
@@ -1057,6 +1058,50 @@ export default function ChartPanel({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [isFocused, drawingUndo]);
+
+  // Ctrl+C / Ctrl+V on drawings (⌘ on Mac).
+  //
+  // The clipboard carries the WHOLE drawing, so a pasted channel keeps its
+  // slope and band width and a pasted position keeps its R — only the shape's
+  // reference point moves, to the mouse. Keyboard focus and pointer position
+  // are different things, so when the pointer is not over this chart the paste
+  // falls back to the middle of what's on screen rather than doing nothing.
+  //
+  // Paste is skipped while the rail's hide-all is on: the drawing would land
+  // invisibly and look like the key did nothing.
+  useEffect(() => {
+    if (!isFocused) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+      if (key !== 'c' && key !== 'v') return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
+
+      if (key === 'c') {
+        // Never steal a real text copy — if the user has selected text on the
+        // page, Ctrl+C belongs to the browser.
+        if (window.getSelection()?.toString()) return;
+        const sel = getDrawings(panel.symbol).find((d) => d.id === selectedDrawingId);
+        if (!sel) return;
+        e.preventDefault();
+        copyDrawing(sel);
+        return;
+      }
+
+      if (!showDrawings) return;
+      const src = readClipboard();
+      if (!src) return;
+      const anchor = chartRef.current?.getCursorPoint() ?? chartRef.current?.getViewCenter();
+      if (!anchor) return;
+      e.preventDefault();
+      const pasted = translateDrawingTo(cloneDrawing(src), anchor);
+      setDrawings([...getDrawings(panel.symbol), pasted]);
+      setSelectedDrawingId(pasted.id);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isFocused, panel.symbol, selectedDrawingId, showDrawings, setDrawings]);
 
   // Backspace/Delete removes the highlighted drawing; Escape deselects. Scoped to
   // the focused panel and ignored while typing in inputs.

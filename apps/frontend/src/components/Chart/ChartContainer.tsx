@@ -22,7 +22,8 @@ import type {
 import { LineStyle } from 'lightweight-charts';
 import type { Bar } from '@ibkr-chart/types';
 import type { IndicatorSeries } from '../../lib/indicators';
-import type { Drawing, DataTimeRange } from '../../lib/drawings';
+import type { Drawing, DataTimeRange, DrawingPoint } from '../../lib/drawings';
+import { timeToUnix, xToTimeAnchored } from '../../lib/drawings';
 import type { SessionRegion } from '../../lib/sessions';
 import { SessionShadingPrimitive } from '../../lib/sessionShadingPrimitive';
 import { DrawingsPrimitive } from '../../lib/drawingsPrimitive';
@@ -154,6 +155,19 @@ export interface ChartHandle {
   fitContent: () => void;
   /** Price under the mouse cursor right now (null when off-chart). For Alt+A alerts. */
   getCursorPrice: () => number | null;
+  /**
+   * Time+price under the mouse right now, or null when the pointer has not been
+   * over this chart. Where Ctrl+V drops a pasted drawing.
+   */
+  getCursorPoint: () => DrawingPoint | null;
+  /**
+   * A sane spot in the middle of what's on screen — the paste fallback for when
+   * the pointer is elsewhere (keyboard focus and mouse position are not the
+   * same thing). Anchored on a REAL bar time rather than the midpoint of the
+   * visible range, because a midpoint between two UTC midnights is not itself
+   * day-level and would be re-read as an intraday instant on a daily chart.
+   */
+  getViewCenter: () => DrawingPoint | null;
 }
 
 interface Props {
@@ -212,6 +226,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     // rolled the chart to the next minute).
     const lastTimeRef  = useRef(0);
     const cursorPriceRef = useRef<number | null>(null); // price under the mouse (crosshair)
+    const cursorPxRef = useRef<{ x: number; y: number } | null>(null); // and its pixel position
     const markersRef = useRef<SeriesMarker<Time>[]>([]); // execution arrows (re-applied after full repaints)
     const earningsMarksRef = useRef<EarningsMark[]>([]); // earnings badges (need the current bar count)
     const onHoverBarRef = useRef(onHoverBar);
@@ -315,6 +330,7 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
       // and the whole bar under it (for the on-chart OHLC legend).
       const onCross = (param: { point?: { x: number; y: number }; seriesData?: Map<unknown, unknown> }) => {
         cursorPriceRef.current = param.point ? candle.coordinateToPrice(param.point.y) : null;
+        cursorPxRef.current = param.point ? { x: param.point.x, y: param.point.y } : null;
         const cp = param.seriesData?.get(candle) as Partial<HoverBar> | undefined;
         const vp = param.seriesData?.get(volume) as { value?: number } | undefined;
         onHoverBarRef.current?.(
@@ -661,6 +677,37 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     const scrollToEnd = useCallback(() => chartRef.current?.timeScale().scrollToRealTime(), []);
     const getCursorPrice = useCallback(() => cursorPriceRef.current, []);
 
+    const getCursorPoint = useCallback((): DrawingPoint | null => {
+      const pt = cursorPxRef.current;
+      const chart = chartRef.current;
+      const candle = candleRef.current;
+      if (!pt || !chart || !candle) return null;
+      const price = candle.coordinateToPrice(pt.y);
+      if (price === null) return null;
+      // Right of the last bar `coordinateToTime` gives nothing, so extrapolate a
+      // real future time the same way the drawing layer does — pasting into the
+      // whitespace at the right edge is perfectly reasonable.
+      const rawT = chart.timeScale().coordinateToTime(pt.x);
+      const time = rawT !== null
+        ? timeToUnix(rawT)
+        : xToTimeAnchored(chart, pt.x, dataTimeRange, candle) ?? dataTimeRange?.last ?? null;
+      if (time === null) return null;
+      return { time, price };
+    }, [dataTimeRange]);
+
+    const getViewCenter = useCallback((): DrawingPoint | null => {
+      const chart = chartRef.current;
+      const candle = candleRef.current;
+      if (!chart || !candle) return null;
+      const range = chart.timeScale().getVisibleLogicalRange();
+      const data = candle.data();
+      if (!range || !data.length) return null;
+      const idx = Math.max(0, Math.min(data.length - 1, Math.round((range.from + range.to) / 2)));
+      const price = candle.coordinateToPrice(Math.max(1, dims.h / 2));
+      if (price === null) return null;
+      return { time: timeToUnix(data[idx].time), price };
+    }, [dims.h]);
+
     const setMarkers = useCallback((markers: SeriesMarker<Time>[]) => {
       markersRef.current = markers;
       applyMarkers();
@@ -726,8 +773,8 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
     }, [hitTestIndicators, hitTestSessionLevels, onIndicatorOpenSettings, onSessionLevelOpenSettings]);
 
     useImperativeHandle(ref, () => ({
-      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, setEarningsMarks, fitContent, scrollToEnd, getCursorPrice,
-    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, setEarningsMarks, fitContent, scrollToEnd, getCursorPrice]);
+      setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, setEarningsMarks, fitContent, scrollToEnd, getCursorPrice, getCursorPoint, getViewCenter,
+    }), [setData, updateBar, addBar, correctBars, setIndicators, setSessionLevels, setSessionRegions, setMarkers, setEarningsMarks, fitContent, scrollToEnd, getCursorPrice, getCursorPoint, getViewCenter]);
 
     return (
       <div ref={containerRef} style={{ width: '100%', height: '100%', position: 'relative' }}>
