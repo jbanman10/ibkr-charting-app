@@ -198,6 +198,30 @@ Four workspaces:
       - **A saved rectangle default outranks the sticky `rectColor`** in `ChartPanel` (which makes
         new rectangles reuse the last colour you picked). Explicit beats implicit; Reset hands
         control back to the sticky behaviour.
+  - **Copy / paste / ctrl-drag duplicate** (`lib/drawingClipboard.ts`) — Ctrl+C, Ctrl+V, and
+    ctrl-drag a selected drawing's body to drag a copy off it (TradingView's gesture).
+    The clipboard holds the WHOLE drawing, so a pasted channel keeps its slope *and* band width
+    and a pasted position keeps its R; only the shape's reference point moves (`refPointOf` →
+    `translateDrawingTo`), and nothing is recomputed from the target chart. The pure drag maths
+    (`applyMove`/`applyResize`) moved into `lib/drawings.ts` so paste, duplicate and drag all share
+    one implementation. Four traps:
+      - **Ctrl is overloaded.** It is this app's magnet/snap key AND TradingView's duplicate
+        modifier, so a ctrl-drag duplicate passes `{ snap: false }` to `getLogical` — otherwise the
+        copy jumps wick to wick while you place it. Snapping still works when creating a drawing.
+      - **`applyMove` does NOT move a callout whole** — it pins the tail on purpose. Right for a
+        drag, wrong for a paste, so `translateDrawingTo` special-cases callouts; without it the
+        pasted copy's tail stretches back to the original's anchor.
+      - **`cloneDrawing` deep-copies.** A shallow spread hands the copy the SAME `p1`/`p2` objects
+        and the first drag of either moves both.
+      - **localStorage, not a module variable.** Ctrl+N opens a second Electron window with its own
+        renderer, so a module-level slot would be invisible to it; same origin = same storage, so
+        copy in one window and paste in another works (and survives a reload).
+    Paste anchors at the mouse (`ChartHandle.getCursorPoint`), falling back to
+    `getViewCenter()` when the pointer is elsewhere — keyboard focus and pointer position are not
+    the same thing. `getViewCenter` anchors on a REAL bar time, because the midpoint between two
+    UTC midnights is not itself day-level and would be re-read as an intraday instant on a daily
+    chart. Ctrl+C is ignored while text is selected (that copy belongs to the browser), and paste
+    is skipped while the rail's hide-all is on, since the drawing would land invisibly.
   - **Drawing undo (Ctrl+Z)** — `lib/drawingStore.ts` keeps a per-symbol stack of previous drawing
     lists (in-memory, capped 60, not persisted). `setDrawings(symbol, next, { undoable: false })`
     opts out — the alert-triggered write uses it, since that's not a user edit and would otherwise

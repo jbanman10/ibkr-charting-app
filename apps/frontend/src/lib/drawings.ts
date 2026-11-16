@@ -806,6 +806,141 @@ function distToSegment(p: PixelPoint, a: PixelPoint, b: PixelPoint): number {
   return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
+// ─── Interaction: move, resize, duplicate ─────────────────────────────────────
+
+/**
+ * Move a drawing by a logical (time/price) delta.
+ *
+ * This and `applyResize` are the pure core of every drag — what actually
+ * decides where a shape ends up — so they sit here with the rest of the
+ * geometry rather than inside the canvas component, and can be checked without
+ * synthesising a pointer gesture. Paste and ctrl-drag duplicate route through
+ * `applyMove` as well, so a pasted shape cannot land differently from a
+ * dragged one.
+ */
+export function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
+  if (d.type === 'hline') return { ...d, price: d.price + dPrice };
+  // Dragging an alert to a new price re-arms it.
+  if (d.type === 'alert') return { ...d, price: d.price + dPrice, triggeredAt: null };
+  if (d.type === 'callout') {
+    // The tail is PINNED to what it points at: dragging the bubble slides the
+    // text around while the tip stays on its candle, which is the whole point
+    // of a callout. The tip is still movable on its own — grab its handle
+    // (applyResize, handle 'anchor') to re-aim it.
+    return { ...d, bubble: { time: d.bubble.time + dTime, price: d.bubble.price + dPrice } };
+  }
+  if (d.type === 'position') {
+    return {
+      ...d,
+      time1: d.time1 + dTime, time2: d.time2 + dTime,
+      entry: d.entry + dPrice, stop: d.stop + dPrice, target: d.target + dPrice,
+    };
+  }
+  // trendline / rectangle / channel: shift both anchors. A channel's `offset`
+  // is a DELTA, so it is deliberately left alone — the band keeps its width.
+  const shift = (p: DrawingPoint): DrawingPoint => ({ time: p.time + dTime, price: p.price + dPrice });
+  return { ...d, p1: shift(d.p1), p2: shift(d.p2) } as Drawing;
+}
+
+/** Resize a drawing by dragging one handle to a new logical point. */
+export function applyResize(d: Drawing, handle: ResizeHandle, logical: DrawingPoint): Drawing {
+  if (d.type === 'trendline') {
+    return handle === 'p1' ? { ...d, p1: logical } : { ...d, p2: logical };
+  }
+  if (d.type === 'callout') {
+    // Either end moves independently: retarget the tip, or reposition the bubble.
+    return handle === 'anchor' ? { ...d, anchor: logical } : { ...d, bubble: logical };
+  }
+  if (d.type === 'channel') {
+    // The width handle sets the gap at the time it was dragged to, measured off
+    // the base edge, so the far edge lands under the pointer whatever the slope.
+    if (handle === 'offset') return { ...d, offset: logical.price - channelLinePriceAt(d, logical.time) };
+    return handle === 'p1' ? { ...d, p1: logical } : { ...d, p2: logical };
+  }
+  if (d.type === 'position') {
+    switch (handle) {
+      case 'entry':  return { ...d, entry: logical.price };
+      case 'stop':   return { ...d, stop: logical.price };
+      case 'target': return { ...d, target: logical.price };
+      case 'right':  return { ...d, time2: Math.max(logical.time, d.time1 + 1) };
+      default:       return d;
+    }
+  }
+  if (d.type === 'rectangle') {
+    const tLeft = Math.min(d.p1.time, d.p2.time);
+    const tRight = Math.max(d.p1.time, d.p2.time);
+    const pLow = Math.min(d.p1.price, d.p2.price);
+    const pHigh = Math.max(d.p1.price, d.p2.price);
+    // The fixed anchor is the corner diagonally opposite the grabbed one.
+    let fixed: DrawingPoint;
+    switch (handle) {
+      case 'tl': fixed = { time: tRight, price: pLow }; break;  // opposite = br
+      case 'tr': fixed = { time: tLeft,  price: pLow }; break;  // opposite = bl
+      case 'bl': fixed = { time: tRight, price: pHigh }; break; // opposite = tr
+      default:   fixed = { time: tLeft,  price: pHigh };        // 'br' opposite = tl
+    }
+    // Explicit resize clears extend-right (user is setting a concrete far corner).
+    return { ...d, p1: fixed, p2: logical, extendRight: false };
+  }
+  return d;
+}
+
+
+/**
+ * The point a drawing is positioned BY — its first anchor.
+ *
+ * Paste and duplicate put this one point where they are asked to and let every
+ * other coordinate follow it. That is what preserves a channel's slope and
+ * band width, a rectangle's size and a position's R multiple: nothing is
+ * recomputed, the whole shape is translated. Price-only shapes have no
+ * meaningful time of their own, so they report the caller's.
+ */
+export function refPointOf(d: Drawing, fallbackTime: number): DrawingPoint {
+  switch (d.type) {
+    case 'hline':
+    case 'alert':    return { time: fallbackTime, price: d.price };
+    case 'position': return { time: d.time1, price: d.entry };
+    case 'callout':  return { ...d.anchor };
+    default:         return { ...d.p1 };
+  }
+}
+
+/**
+ * A copy with a fresh id that shares no objects with the source — a shallow
+ * spread would hand the copy the SAME `p1`/`p2` objects, and the first drag of
+ * either one would silently move both.
+ */
+export function cloneDrawing(d: Drawing): Drawing {
+  const copy = JSON.parse(JSON.stringify(d)) as Drawing;
+  copy.id = newDrawingId();
+  // A duplicated alert starts armed — the copy has not fired, and inheriting a
+  // triggered state would leave a dead line that never quacks.
+  if (copy.type === 'alert') copy.triggeredAt = null;
+  return copy;
+}
+
+/** Place `d` so its reference point sits at `anchor`, shape untouched. */
+export function translateDrawingTo(d: Drawing, anchor: DrawingPoint): Drawing {
+  const ref = refPointOf(d, anchor.time);
+  const dTime = anchor.time - ref.time;
+  const dPrice = anchor.price - ref.price;
+
+  // A callout is the one shape `applyMove` does NOT move whole: dragging its
+  // body slides the bubble and deliberately leaves the tail tip pinned to the
+  // candle it marks. That is right for a drag and wrong for a paste, which has
+  // to relocate the entire annotation — otherwise the pasted copy's tail
+  // stretches all the way back to the original's anchor.
+  if (d.type === 'callout') {
+    return {
+      ...d,
+      anchor: { time: d.anchor.time + dTime, price: d.anchor.price + dPrice },
+      bubble: { time: d.bubble.time + dTime, price: d.bubble.price + dPrice },
+    };
+  }
+
+  return applyMove(d, dTime, dPrice);
+}
+
 // ─── Canvas rendering ─────────────────────────────────────────────────────────
 
 export function renderDrawings(

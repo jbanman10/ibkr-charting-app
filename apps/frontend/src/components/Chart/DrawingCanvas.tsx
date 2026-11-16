@@ -30,6 +30,9 @@ import {
   renderDrawings,
   hitTestDrawing,
   hitResizeHandle,
+  applyMove,
+  applyResize,
+  cloneDrawing,
   newDrawingId,
   plotRight,
   timeToUnix,
@@ -67,7 +70,10 @@ const DRAG_THRESHOLD = 4;
 
 type HoverInfo = { mode: 'move' | 'resize'; handle?: ResizeHandle; cursor: string };
 type Interaction =
-  | { kind: 'move'; orig: Drawing; grab: DrawingPoint }
+  // `duplicate` means `orig` is a fresh copy being dragged off the original,
+  // which stays put — TradingView's ctrl-drag. It changes what pointer-up does
+  // (append, not replace) and switches candle snapping off for the gesture.
+  | { kind: 'move'; orig: Drawing; grab: DrawingPoint; duplicate?: boolean }
   | { kind: 'resize'; orig: Drawing; handle: ResizeHandle };
 
 // ─── Pure geometry helpers ────────────────────────────────────────────────────
@@ -82,80 +88,6 @@ function cursorForHandle(handle: ResizeHandle, type: Drawing['type']): string {
   // Rectangle corners: diagonal resize cursors.
   if (handle === 'tl' || handle === 'br') return 'nwse-resize';
   return 'nesw-resize';
-}
-
-/**
- * Move a drawing by a logical (time/price) delta.
- *
- * Exported because it and `applyResize` are the pure core of every drag — what
- * actually decides where a shape ends up — and they're worth checking without
- * having to synthesise a pointer gesture.
- */
-export function applyMove(d: Drawing, dTime: number, dPrice: number): Drawing {
-  if (d.type === 'hline') return { ...d, price: d.price + dPrice };
-  // Dragging an alert to a new price re-arms it.
-  if (d.type === 'alert') return { ...d, price: d.price + dPrice, triggeredAt: null };
-  if (d.type === 'callout') {
-    // The tail is PINNED to what it points at: dragging the bubble slides the
-    // text around while the tip stays on its candle, which is the whole point
-    // of a callout. The tip is still movable on its own — grab its handle
-    // (applyResize, handle 'anchor') to re-aim it.
-    return { ...d, bubble: { time: d.bubble.time + dTime, price: d.bubble.price + dPrice } };
-  }
-  if (d.type === 'position') {
-    return {
-      ...d,
-      time1: d.time1 + dTime, time2: d.time2 + dTime,
-      entry: d.entry + dPrice, stop: d.stop + dPrice, target: d.target + dPrice,
-    };
-  }
-  // trendline / rectangle / channel: shift both anchors. A channel's `offset`
-  // is a DELTA, so it is deliberately left alone — the band keeps its width.
-  const shift = (p: DrawingPoint): DrawingPoint => ({ time: p.time + dTime, price: p.price + dPrice });
-  return { ...d, p1: shift(d.p1), p2: shift(d.p2) } as Drawing;
-}
-
-/** Resize a drawing by dragging one handle to a new logical point. */
-export function applyResize(d: Drawing, handle: ResizeHandle, logical: DrawingPoint): Drawing {
-  if (d.type === 'trendline') {
-    return handle === 'p1' ? { ...d, p1: logical } : { ...d, p2: logical };
-  }
-  if (d.type === 'callout') {
-    // Either end moves independently: retarget the tip, or reposition the bubble.
-    return handle === 'anchor' ? { ...d, anchor: logical } : { ...d, bubble: logical };
-  }
-  if (d.type === 'channel') {
-    // The width handle sets the gap at the time it was dragged to, measured off
-    // the base edge, so the far edge lands under the pointer whatever the slope.
-    if (handle === 'offset') return { ...d, offset: logical.price - channelLinePriceAt(d, logical.time) };
-    return handle === 'p1' ? { ...d, p1: logical } : { ...d, p2: logical };
-  }
-  if (d.type === 'position') {
-    switch (handle) {
-      case 'entry':  return { ...d, entry: logical.price };
-      case 'stop':   return { ...d, stop: logical.price };
-      case 'target': return { ...d, target: logical.price };
-      case 'right':  return { ...d, time2: Math.max(logical.time, d.time1 + 1) };
-      default:       return d;
-    }
-  }
-  if (d.type === 'rectangle') {
-    const tLeft = Math.min(d.p1.time, d.p2.time);
-    const tRight = Math.max(d.p1.time, d.p2.time);
-    const pLow = Math.min(d.p1.price, d.p2.price);
-    const pHigh = Math.max(d.p1.price, d.p2.price);
-    // The fixed anchor is the corner diagonally opposite the grabbed one.
-    let fixed: DrawingPoint;
-    switch (handle) {
-      case 'tl': fixed = { time: tRight, price: pLow }; break;  // opposite = br
-      case 'tr': fixed = { time: tLeft,  price: pLow }; break;  // opposite = bl
-      case 'bl': fixed = { time: tRight, price: pHigh }; break; // opposite = tr
-      default:   fixed = { time: tLeft,  price: pHigh };        // 'br' opposite = tl
-    }
-    // Explicit resize clears extend-right (user is setting a concrete far corner).
-    return { ...d, p1: fixed, p2: logical, extendRight: false };
-  }
-  return d;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -217,7 +149,11 @@ export default function DrawingCanvas({
 
   // ─── Coordinate helpers ─────────────────────────────────────────────────────
 
-  const getLogical = useCallback((e: React.PointerEvent): DrawingPoint | null => {
+  // `snap: false` turns the ctrl-held candle snap off for one call. Ctrl is
+  // overloaded — it is this app's magnet key AND TradingView's duplicate
+  // modifier — so a ctrl-drag duplicate would otherwise jump wick to wick
+  // while you tried to place it.
+  const getLogical = useCallback((e: React.PointerEvent, opts?: { snap?: boolean }): DrawingPoint | null => {
     if (!chart || !priceSeries) return null;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return null;
@@ -237,7 +173,7 @@ export default function DrawingCanvas({
     // Hold Ctrl to snap to the nearest candle's high or low: above the high →
     // high, below the low → low, inside the candle's range → whichever wick is
     // nearer (ties go to the high).
-    if (e.ctrlKey && bars.length) {
+    if ((opts?.snap ?? true) && e.ctrlKey && bars.length) {
       let nearest = bars[0];
       let best = Infinity;
       for (const b of bars) {
@@ -357,6 +293,23 @@ export default function DrawingCanvas({
       if (!sel) return;
       e.stopPropagation();
       canvasRef.current?.setPointerCapture(e.pointerId);
+
+      // Ctrl (or ⌘) + drag on the BODY leaves the original where it is and
+      // drags a copy off it. Only the body: ctrl on a resize handle still
+      // resizes, since duplicating by a corner has no obvious meaning.
+      const duplicate = h.mode === 'move' && (e.ctrlKey || e.metaKey);
+      if (duplicate) {
+        // Re-read the grab point with snapping off, or the first move would
+        // jump by the difference between the snapped and real press position.
+        const grab = getLogical(e, { snap: false }) ?? logical;
+        const copy = cloneDrawing(sel);
+        interactionRef.current = { kind: 'move', orig: copy, grab, duplicate: true };
+        setInProgress(copy);
+        // Deliberately no onDragChange: that hides the dragged drawing's
+        // committed copy, and here the original must stay on screen.
+        return;
+      }
+
       interactionRef.current = h.mode === 'resize'
         ? { kind: 'resize', orig: sel, handle: h.handle! }
         : { kind: 'move', orig: sel, grab: logical };
@@ -433,11 +386,13 @@ export default function DrawingCanvas({
   }, [activeTool, hover, selectedId, firstPoint, bars, getLogical, getPixel, computeHover, onDragChange, onDrawingsChange, onDrawingComplete, onSelect, rectColor, commitCreate]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    const logical = getLogical(e);
+    const it = interactionRef.current;
+    // A duplicate drag holds ctrl the whole way, which would otherwise keep the
+    // copy snapping to candle wicks instead of following the pointer.
+    const logical = getLogical(e, it?.kind === 'move' && it.duplicate ? { snap: false } : undefined);
     const px = getPixel(e);
 
     // Active drag of a committed drawing (move/resize).
-    const it = interactionRef.current;
     if (it && logical) {
       const live = it.kind === 'move'
         ? applyMove(it.orig, logical.time - it.grab.time, logical.price - it.grab.price)
@@ -478,7 +433,15 @@ export default function DrawingCanvas({
       const live = inProgress;
       interactionRef.current = null;
       canvasRef.current?.releasePointerCapture(e.pointerId);
-      if (live) onDrawingsChange(drawingsRef.current.map((d) => (d.id === it.orig.id ? live : d)));
+      if (live) {
+        if (it.kind === 'move' && it.duplicate) {
+          // Append: the original is still in the list and must stay there.
+          onDrawingsChange([...drawingsRef.current, live]);
+          onSelect?.(live.id); // the copy is what you are now holding
+        } else {
+          onDrawingsChange(drawingsRef.current.map((d) => (d.id === it.orig.id ? live : d)));
+        }
+      }
       setInProgress(null);
       onDragChange?.(null);
       const px = getPixel(e);
@@ -508,7 +471,7 @@ export default function DrawingCanvas({
         canvasRef.current?.releasePointerCapture(e.pointerId);
       }
     }
-  }, [activeTool, firstPoint, inProgress, getLogical, getPixel, computeHover, onDrawingsChange, onDragChange, commitCreate]);
+  }, [activeTool, firstPoint, inProgress, getLogical, getPixel, computeHover, onDrawingsChange, onDragChange, onSelect, commitCreate]);
 
   const handlePointerLeave = useCallback(() => {
     chart?.clearCrosshairPosition();
