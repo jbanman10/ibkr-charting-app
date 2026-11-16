@@ -438,6 +438,15 @@ doesn't crash the dev server.
   The package is imported from `dist`, so **after editing `TIMEFRAMES` you must
   `npm run build --workspace=packages/types`** or everything silently keeps running the old
   durations — nothing fails, the charts just stay short.
+- **How deep a chart LOADS and how far it opens ZOOMED are separate knobs.** `setData` used to
+  `fitContent()` for everything but 1m, so deepening a window silently zoomed that timeframe out:
+  daily went to five years of candles on screen, nowhere near today's price, the moment the window
+  grew. `INITIAL_BARS` / `initialBarsFor()` (ChartContainer, beside `rightOffsetFor`) now set how
+  many candles a snapshot opens on, anchored to the live edge with the same right-hand buffer the
+  resize path leaves; `from` clamps at 0 so a short history still shows everything. The values are
+  the span each timeframe fitted BEFORE the windows were deepened (1d 250 ≈ 1 Y, 30m 630 ≈ 20 D),
+  so a timeframe switch looks as it always did and the extra history is purely scroll-back. Change
+  a window and you probably want to leave this alone — that's the point of it being separate.
 - **An MA's warm-up eats the left edge, so depth is what makes long MAs exist.** `calcSMA` starts
   at `i = period - 1`, so a 200-period MA needs 200 bars before it plots a single point. At the old
   1 Y daily window (251 bars) the 200-day MA existed on **52 bars — the last fifth of the chart**;
