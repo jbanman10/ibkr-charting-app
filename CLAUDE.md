@@ -426,6 +426,36 @@ doesn't crash the dev server.
   away-from-market prints back — and adding the clamp means a second historical request per
   rollover, which at four 1m panels (~40 per 10 min already) trips IBKR's ~60/10min pacing.
   Extended-hours closes are corrected by the frontend's `/api/bars` re-sync, which does clamp.
+- **History depth is one table, and `packages/types` is consumed from `dist`.**
+  `TIMEFRAMES[tf].durationStr` sets how far back every chart loads — it drives the
+  `keepUpToDate` snapshot AND one-shot `/api/bars`. Current windows: 1m 2 D · 5m 10 D ·
+  15m 1 M · 30m 3 M · 1h 6 M · 4h 1 Y · 1d 5 Y · 1w 15 Y. **1m is capped at 2 D on purpose**:
+  measured against TWS, 1 M of 1m bars is 19,831 bars and takes **11.9s**, and that cost lands on
+  every symbol/timeframe switch because the same duration drives the live snapshot. Everything
+  else above returns in under 600ms. IBKR's published "max duration per bar size" table is stale —
+  the hard limits for barSize >= 1 min are lifted (30m at 1 Y returns 8,009 bars fine); what
+  remains is a soft throttle, so depth costs latency, not errors.
+  The package is imported from `dist`, so **after editing `TIMEFRAMES` you must
+  `npm run build --workspace=packages/types`** or everything silently keeps running the old
+  durations — nothing fails, the charts just stay short.
+- **An MA's warm-up eats the left edge, so depth is what makes long MAs exist.** `calcSMA` starts
+  at `i = period - 1`, so a 200-period MA needs 200 bars before it plots a single point. At the old
+  1 Y daily window (251 bars) the 200-day MA existed on **52 bars — the last fifth of the chart**;
+  at 5 Y (1,253 bars) it covers 1,054. The daily-source (MTF) MAs have the same dependency: they
+  fetch `timeframe: '1d'`, so the daily window is what decides whether a 200-day MA can be drawn on
+  a 1m chart at all. If a long MA looks truncated, the window is too short — not the maths.
+- **The periodic re-sync asks for the live edge only (`scope=recent`), and MERGES.**
+  It exists to repair late-reported prints, IBKR's penny revisions and the extended-hours NBBO
+  clamp, all of which only touch the newest bars. It used to refetch the whole `durationStr` every
+  3-3.5 minutes per panel and replace `barsRef` outright, which is what made a deep history
+  expensive to *keep* rather than just to load. `/api/bars?scope=recent` serves
+  `RESYNC_DURATIONS[tf]` instead (measured on 30m: **54 bars per cycle instead of 2,006**), and
+  `lib/bars.ts#mergeRecentBars` splices it over the loaded history. The cut is strict (`<` the
+  first repaired bar) so the result stays ascending with no duplicate times — lightweight-charts
+  rejects anything else with "data must be asc ordered by time". Degenerate cases (nothing older
+  held) fall back to replace, which is the old behaviour. The backend's own on-rollover
+  `correctRecent` is unaffected: it computes its own ~5-bar window from `tf.seconds`, not
+  `durationStr`.
 - **Live candles come from IBKR `keepUpToDate`, not aggregation.** The old 5-sec `BarAggregator`
   (+ flat-fill, reconcile, continuity, deep-resync) is gone. `keepUpToDate` keeps the *forming* bar
   correct (incl. today's daily bar — no more "aggregate today's intraday" hack) but does **not**

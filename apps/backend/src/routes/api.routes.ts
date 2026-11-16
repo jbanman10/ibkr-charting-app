@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { Timeframe, SecType, Quote } from '@ibkr-chart/types';
-import { TIMEFRAMES } from '@ibkr-chart/types';
+import { TIMEFRAMES, RESYNC_DURATIONS } from '@ibkr-chart/types';
 import { MarketDataService } from '../services/market-data.service.js';
 import { ExecutionsService } from '../services/executions.service.js';
 import { IBKRService } from '../services/ibkr.service.js';
@@ -65,6 +65,12 @@ const BarsQuerySchema = z.object({
   // Unix seconds. Requests the window ENDING here instead of "now" — used by
   // the trade journal to load a past session's intraday chart.
   end:       z.coerce.number().int().positive().optional(),
+  // 'recent' serves only the live edge (RESYNC_DURATIONS) instead of the
+  // timeframe's full window. The chart's periodic re-sync uses it: it repairs
+  // late prints near the right edge and has no reason to re-download months of
+  // settled history every few minutes. Defaults to the full window so every
+  // other caller is unchanged.
+  scope:     z.enum(['full', 'recent']).default('full'),
 });
 
 const SearchQuerySchema = z.object({
@@ -89,7 +95,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(400).send({ error: 'Invalid query', details: parsed.error.format() });
     }
 
-    const { symbol, secType, exchange, currency, timeframe, useRTH, primaryExchange, end } = parsed.data;
+    const { symbol, secType, exchange, currency, timeframe, useRTH, primaryExchange, end, scope } = parsed.data;
 
     if (!ibkr.isConnected) {
       return reply.status(503).send({ error: 'IBKR not connected' });
@@ -97,8 +103,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
 
     try {
       const contract = MarketDataService.toIBContract(symbol, secType as SecType, exchange, currency, primaryExchange);
-      const bars = await marketData.fetchHistoricalBars(contract, timeframe, useRTH as 0 | 1, end);
-      app.log.info({ symbol, timeframe, useRTH, end, count: bars.length }, 'Bars served');
+      const duration = scope === 'recent' ? RESYNC_DURATIONS[timeframe] : undefined;
+      const bars = await marketData.fetchHistoricalBars(contract, timeframe, useRTH as 0 | 1, end, duration);
+      app.log.info({ symbol, timeframe, useRTH, end, scope, count: bars.length }, 'Bars served');
       return { symbol, timeframe, useRTH, bars };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';

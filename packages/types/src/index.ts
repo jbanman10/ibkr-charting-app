@@ -214,13 +214,36 @@ export interface TimeframeConfig {
 
 export const TIMEFRAMES: Record<Timeframe, TimeframeConfig> = {
   '1m':  { label: '1m',  barSize: '1 min',  durationStr: '2 D',  seconds: 60 },
-  '5m':  { label: '5m',  barSize: '5 mins', durationStr: '5 D',  seconds: 300 },
-  '15m': { label: '15m', barSize: '15 mins',durationStr: '10 D', seconds: 900 },
-  '30m': { label: '30m', barSize: '30 mins',durationStr: '20 D', seconds: 1800 },
-  '1h':  { label: '1h',  barSize: '1 hour', durationStr: '30 D', seconds: 3600 },
-  '4h':  { label: '4h',  barSize: '4 hours',durationStr: '60 D', seconds: 14400 },
-  '1d':  { label: '1D',  barSize: '1 day',  durationStr: '1 Y',  seconds: 86400 },
-  '1w':  { label: '1W',  barSize: '1 week', durationStr: '5 Y',  seconds: 604800 },
+  '5m':  { label: '5m',  barSize: '5 mins', durationStr: '10 D', seconds: 300 },
+  '15m': { label: '15m', barSize: '15 mins',durationStr: '1 M',  seconds: 900 },
+  '30m': { label: '30m', barSize: '30 mins',durationStr: '3 M',  seconds: 1800 },
+  '1h':  { label: '1h',  barSize: '1 hour', durationStr: '6 M',  seconds: 3600 },
+  '4h':  { label: '4h',  barSize: '4 hours',durationStr: '1 Y',  seconds: 14400 },
+  '1d':  { label: '1D',  barSize: '1 day',  durationStr: '5 Y',  seconds: 86400 },
+  '1w':  { label: '1W',  barSize: '1 week', durationStr: '15 Y', seconds: 604800 },
+};
+
+/**
+ * How much history the ~3-minute re-sync asks for, per timeframe.
+ *
+ * The re-sync exists only to repair the LIVE EDGE — late-reported prints, the
+ * extended-hours NBBO clamp, IBKR's penny revisions. Without this it reused
+ * `durationStr` and refetched the whole window every cycle, per panel, which
+ * is what made a deep history expensive to *keep* rather than just to load:
+ * 30m at 3 months is 2,006 bars a cycle versus 54 here (measured).
+ *
+ * The frontend merges this window over its existing history rather than
+ * replacing it, so the depth above survives.
+ */
+export const RESYNC_DURATIONS: Record<Timeframe, string> = {
+  '1m':  '2 D',
+  '5m':  '2 D',
+  '15m': '2 D',
+  '30m': '2 D',
+  '1h':  '2 D',
+  '4h':  '5 D',
+  '1d':  '1 M',
+  '1w':  '3 M',
 };
 
 // ─── WebSocket message protocol ──────────────────────────────────────────────

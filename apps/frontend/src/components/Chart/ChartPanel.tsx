@@ -6,6 +6,7 @@ import type { DrawingToolType } from './DrawingCanvas';
 import { useSymbolDrawings } from '../../hooks/useSymbolDrawings';
 import { seedDrawings, getDrawings } from '../../lib/drawingStore';
 import { newDrawingId, unixToDayString, cloneDrawing, translateDrawingTo } from '../../lib/drawings';
+import { mergeRecentBars } from '../../lib/bars';
 import { copyDrawing, readClipboard } from '../../lib/drawingClipboard';
 import { ensureAudio, playQuack, shouldFire } from '../../lib/quack';
 import { getExecutions, subscribeExecutions } from '../../lib/executionStore';
@@ -438,8 +439,16 @@ export default function ChartPanel({
   // Periodic history re-sync — a backstop for late-reported prints, IBKR's
   // penny-level history revisions, and the extended-hours NBBO clamp (via
   // /api/bars). The backend's on-rollover correction already finalizes
-  // regular-hours candles immediately, so this runs infrequently. Jittered so
-  // panels don't burst together. ALSO fires when the window becomes visible:
+  // regular-hours candles immediately, so this runs infrequently.
+  //
+  // It asks for `scope=recent` (a couple of sessions) and MERGES that over the
+  // history already loaded, rather than refetching the panel's whole window and
+  // replacing it. Only the live edge can change, so re-downloading months of
+  // settled bars every few minutes was pure waste — and it is what used to make
+  // a deep history expensive to keep rather than just to load (30m: 2,006 bars
+  // a cycle versus 54). Anything older than the repaired window is kept as is.
+  //
+  // Jittered so panels don't burst together. ALSO fires when the window becomes visible:
   // background/occluded windows get their timers throttled (Chromium/Electron),
   // so an occluded window can miss every cycle and drift from official history —
   // resyncing on visibility guarantees a window is reconciled whenever the user
@@ -463,6 +472,7 @@ export default function ChartPanel({
           currency: panel.currency,
           timeframe: panel.timeframe,
           useRTH: String(panel.useRTH ?? 0),
+          scope: 'recent',
         });
         if (panel.primaryExchange) params.set('primaryExchange', panel.primaryExchange);
         const res = await fetch(`/api/bars?${params}`, { signal: ctrl.signal });
@@ -470,16 +480,19 @@ export default function ChartPanel({
         const body = (await res.json()) as { bars?: Bar[] };
         const official = body.bars ?? [];
         if (official.length < 2) return;
-        barsRef.current = official;
+
+        const merged = mergeRecentBars(barsRef.current, official);
+        barsRef.current = merged;
+
         // Keep the live forming bar on the end (it's newer than official's last
         // when a bar is mid-formation); buildSeries de-dupes by time.
         const forming = formingRef.current;
         const series = forming && Number(forming.time) > Number(official[official.length - 1].time)
-          ? [...official, forming]
-          : official;
+          ? [...merged, forming]
+          : merged;
         chartRef.current?.correctBars(series);
         applyIndicators();
-        setBars(official);
+        setBars(merged);
         recomputeSessions();
       } catch { /* transient — next cycle retries */ }
     };
