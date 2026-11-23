@@ -501,6 +501,27 @@ doesn't crash the dev server.
   backend logs to `%APPDATA%/@ibkr-chart/desktop/backend.log` (userData comes from the package
   name, not the product name — `config.json` lives there too) and old `config.json`s on 3001/1
   are auto-migrated.
+- **Everything historical shares ONE serialized queue, so a chatty background poller
+  starves the charts.** `/api/quotes` used to derive each watchlist row from 2 days of
+  extended-hours 1-minute bars — ~1,600 bars per symbol, *plus* a second BID_ASK leg for the
+  NBBO clamp. On a 14-symbol watchlist in two windows that is ~56 small-bar requests a minute
+  against IBKR's documented 60-per-**ten**-minutes for small bars (BID_ASK counts twice). It
+  survived on quiet days because IBKR's throttle is soft; on a heavy-volume day the queue never
+  drained and **chart snapshots queued behind it for 20-40s or timed out** — diagnosed from the
+  packaged app's `backend.log`, which showed `/api/bars` at 12-20s and one NVDA 1m snapshot taking
+  44s. It now reads DAILY bars (`fetchRecentDailyBars`): the watchlist takes `last` from the live
+  WS stream and only needs prevClose + today's volume, and a daily series has both in a handful of
+  bars. Measured the same morning, same TWS: 14 symbols went from **not completing in 180s to
+  8.6s cold / 0.3s warm**. Two things to keep in mind if you touch it:
+    - **A daily bar carries RTH volume only**, so before the open there is no bar for today and
+      pre-market volume (and the RVOL built on it, which this app supports pre-market) would read
+      as 0. `fetchQuote` falls back to summing one day of 5-minute bars — but only outside RTH,
+      which is when nothing else wants the queue.
+    - **A daily bar's time is UTC midnight of its trading date**, so compare it with `utcDay()`,
+      never an ET formatter — ET reads it a day early (the same trap as `alignToSeries`). Intraday
+      bar times ARE instants, so those use `etDay()`. Both appear in `fetchQuote`, deliberately.
+  `routes/summary.routes.ts` still uses the old 1m pattern for SPY/QQQ, but it is 2 symbols behind
+  a cache and only runs when the popup is opened.
 - **Historical requests are serialized + pacing-aware.** `fetchHistoricalBars` and the
   `keepUpToDate` subscribe issuance queue through a promise chain (`histChain`) with a spacing gap.
   Concurrent direct requests otherwise get all-but-one rejected for pacing. Switching symbol/
