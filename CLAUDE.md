@@ -426,6 +426,45 @@ doesn't crash the dev server.
   away-from-market prints back — and adding the clamp means a second historical request per
   rollover, which at four 1m panels (~40 per 10 min already) trips IBKR's ~60/10min pacing.
   Extended-hours closes are corrected by the frontend's `/api/bars` re-sync, which does clamp.
+- **History depth is one table, and `packages/types` is consumed from `dist`.**
+  `TIMEFRAMES[tf].durationStr` sets how far back every chart loads — it drives the
+  `keepUpToDate` snapshot AND one-shot `/api/bars`. Current windows: 1m 2 D · 5m 10 D ·
+  15m 1 M · 30m 3 M · 1h 6 M · 4h 1 Y · 1d 5 Y · 1w 15 Y. **1m is capped at 2 D on purpose**:
+  measured against TWS, 1 M of 1m bars is 19,831 bars and takes **11.9s**, and that cost lands on
+  every symbol/timeframe switch because the same duration drives the live snapshot. Everything
+  else above returns in under 600ms. IBKR's published "max duration per bar size" table is stale —
+  the hard limits for barSize >= 1 min are lifted (30m at 1 Y returns 8,009 bars fine); what
+  remains is a soft throttle, so depth costs latency, not errors.
+  The package is imported from `dist`, so **after editing `TIMEFRAMES` you must
+  `npm run build --workspace=packages/types`** or everything silently keeps running the old
+  durations — nothing fails, the charts just stay short.
+- **How deep a chart LOADS and how far it opens ZOOMED are separate knobs.** `setData` used to
+  `fitContent()` for everything but 1m, so deepening a window silently zoomed that timeframe out:
+  daily went to five years of candles on screen, nowhere near today's price, the moment the window
+  grew. `INITIAL_BARS` / `initialBarsFor()` (ChartContainer, beside `rightOffsetFor`) now set how
+  many candles a snapshot opens on, anchored to the live edge with the same right-hand buffer the
+  resize path leaves; `from` clamps at 0 so a short history still shows everything. The values are
+  the span each timeframe fitted BEFORE the windows were deepened (1d 250 ≈ 1 Y, 30m 630 ≈ 20 D),
+  so a timeframe switch looks as it always did and the extra history is purely scroll-back. Change
+  a window and you probably want to leave this alone — that's the point of it being separate.
+- **An MA's warm-up eats the left edge, so depth is what makes long MAs exist.** `calcSMA` starts
+  at `i = period - 1`, so a 200-period MA needs 200 bars before it plots a single point. At the old
+  1 Y daily window (251 bars) the 200-day MA existed on **52 bars — the last fifth of the chart**;
+  at 5 Y (1,253 bars) it covers 1,054. The daily-source (MTF) MAs have the same dependency: they
+  fetch `timeframe: '1d'`, so the daily window is what decides whether a 200-day MA can be drawn on
+  a 1m chart at all. If a long MA looks truncated, the window is too short — not the maths.
+- **The periodic re-sync asks for the live edge only (`scope=recent`), and MERGES.**
+  It exists to repair late-reported prints, IBKR's penny revisions and the extended-hours NBBO
+  clamp, all of which only touch the newest bars. It used to refetch the whole `durationStr` every
+  3-3.5 minutes per panel and replace `barsRef` outright, which is what made a deep history
+  expensive to *keep* rather than just to load. `/api/bars?scope=recent` serves
+  `RESYNC_DURATIONS[tf]` instead (measured on 30m: **54 bars per cycle instead of 2,006**), and
+  `lib/bars.ts#mergeRecentBars` splices it over the loaded history. The cut is strict (`<` the
+  first repaired bar) so the result stays ascending with no duplicate times — lightweight-charts
+  rejects anything else with "data must be asc ordered by time". Degenerate cases (nothing older
+  held) fall back to replace, which is the old behaviour. The backend's own on-rollover
+  `correctRecent` is unaffected: it computes its own ~5-bar window from `tf.seconds`, not
+  `durationStr`.
 - **Live candles come from IBKR `keepUpToDate`, not aggregation.** The old 5-sec `BarAggregator`
   (+ flat-fill, reconcile, continuity, deep-resync) is gone. `keepUpToDate` keeps the *forming* bar
   correct (incl. today's daily bar — no more "aggregate today's intraday" hack) but does **not**
@@ -462,6 +501,27 @@ doesn't crash the dev server.
   backend logs to `%APPDATA%/@ibkr-chart/desktop/backend.log` (userData comes from the package
   name, not the product name — `config.json` lives there too) and old `config.json`s on 3001/1
   are auto-migrated.
+- **Everything historical shares ONE serialized queue, so a chatty background poller
+  starves the charts.** `/api/quotes` used to derive each watchlist row from 2 days of
+  extended-hours 1-minute bars — ~1,600 bars per symbol, *plus* a second BID_ASK leg for the
+  NBBO clamp. On a 14-symbol watchlist in two windows that is ~56 small-bar requests a minute
+  against IBKR's documented 60-per-**ten**-minutes for small bars (BID_ASK counts twice). It
+  survived on quiet days because IBKR's throttle is soft; on a heavy-volume day the queue never
+  drained and **chart snapshots queued behind it for 20-40s or timed out** — diagnosed from the
+  packaged app's `backend.log`, which showed `/api/bars` at 12-20s and one NVDA 1m snapshot taking
+  44s. It now reads DAILY bars (`fetchRecentDailyBars`): the watchlist takes `last` from the live
+  WS stream and only needs prevClose + today's volume, and a daily series has both in a handful of
+  bars. Measured the same morning, same TWS: 14 symbols went from **not completing in 180s to
+  8.6s cold / 0.3s warm**. Two things to keep in mind if you touch it:
+    - **A daily bar carries RTH volume only**, so before the open there is no bar for today and
+      pre-market volume (and the RVOL built on it, which this app supports pre-market) would read
+      as 0. `fetchQuote` falls back to summing one day of 5-minute bars — but only outside RTH,
+      which is when nothing else wants the queue.
+    - **A daily bar's time is UTC midnight of its trading date**, so compare it with `utcDay()`,
+      never an ET formatter — ET reads it a day early (the same trap as `alignToSeries`). Intraday
+      bar times ARE instants, so those use `etDay()`. Both appear in `fetchQuote`, deliberately.
+  `routes/summary.routes.ts` still uses the old 1m pattern for SPY/QQQ, but it is 2 symbols behind
+  a cache and only runs when the popup is opened.
 - **Historical requests are serialized + pacing-aware.** `fetchHistoricalBars` and the
   `keepUpToDate` subscribe issuance queue through a promise chain (`histChain`) with a spacing gap.
   Concurrent direct requests otherwise get all-but-one rejected for pacing. Switching symbol/

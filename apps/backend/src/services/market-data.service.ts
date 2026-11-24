@@ -101,23 +101,30 @@ export class MarketDataService {
    * One-shot history. `endUnix` (unix seconds) requests the window ENDING at
    * that instant instead of "now" — how the trade journal loads the 1m chart
    * for a session months in the past. Omit it for the live window.
+   *
+   * `durationOverride` asks for a SHORTER window than the timeframe's own: the
+   * frontend's periodic re-sync only repairs the live edge, so it has no reason
+   * to re-download months of settled history every cycle (see RESYNC_DURATIONS).
+   * It is never used to ask for MORE than the configured window.
    */
   fetchHistoricalBars(
     contract: IBContract,
     timeframe: Timeframe,
     useRTH: 0 | 1 = 1,
-    endUnix?: number
+    endUnix?: number,
+    durationOverride?: string
   ): Promise<Bar[]> {
     if (timeframe === '1d' || timeframe === '1w') useRTH = 1;
     const tf = TIMEFRAMES[timeframe];
+    const duration = durationOverride ?? tf.durationStr;
     const end = endUnix != null ? MarketDataService.toIBEndDateTime(endUnix) : '';
     const result = this.histChain.then(async () => {
-      const bars = await this.runHistoricalRequest(contract, tf.barSize, tf.durationStr, useRTH, WhatToShow.TRADES, end);
+      const bars = await this.runHistoricalRequest(contract, tf.barSize, duration, useRTH, WhatToShow.TRADES, end);
       // Extended-hours intraday: clamp stale away-from-market prints to the NBBO
       // (see sanitizeExtendedBars) so quote-derived values match TWS.
       if (timeframe !== '1d' && timeframe !== '1w' && useRTH === 0) {
         try {
-          const quotes = await this.runHistoricalRequest(contract, tf.barSize, tf.durationStr, 0, WhatToShow.BID_ASK, end);
+          const quotes = await this.runHistoricalRequest(contract, tf.barSize, duration, 0, WhatToShow.BID_ASK, end);
           MarketDataService.sanitizeExtendedBars(bars, quotes);
         } catch { /* serve unfiltered on quote-fetch failure */ }
       }

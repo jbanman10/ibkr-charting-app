@@ -95,6 +95,30 @@ const DEFAULT_RIGHT_OFFSET = 6;
 const RIGHT_OFFSET_BARS: Record<string, number> = { '1m': 20 };
 export const rightOffsetFor = (tf: string): number => RIGHT_OFFSET_BARS[tf] ?? DEFAULT_RIGHT_OFFSET;
 
+// How many candles a chart OPENS on when a snapshot lands (switching timeframe,
+// symbol, or first load). Everything older stays loaded and is one scroll away.
+//
+// This exists because history depth and default zoom are different questions.
+// The charts used to fit their whole window, so deepening the windows (daily
+// 1 Y -> 5 Y, 30m 20 D -> 3 M) silently zoomed every chart out — a daily opened
+// on five years of candles, nowhere near today's price. These counts are the
+// span each timeframe fitted BEFORE the windows were deepened, so a timeframe
+// switch looks exactly as it used to and the extra history is purely scroll-back.
+//
+// Tune freely: one number each, and nothing else depends on them.
+const DEFAULT_INITIAL_BARS = 300;
+const INITIAL_BARS: Record<string, number> = {
+  '1m': 180,  // ~3h — a deliberate override that predates the deeper windows
+  '5m': 920,  // ≈ the old 5 D
+  '15m': 660, // ≈ the old 10 D
+  '30m': 630, // ≈ the old 20 D
+  '1h': 470,  // ≈ the old 30 D
+  '4h': 260,  // ≈ the old 60 D
+  '1d': 250,  // ≈ the old 1 Y
+  '1w': 260,  // ≈ the old 5 Y
+};
+export const initialBarsFor = (tf: string): number => INITIAL_BARS[tf] ?? DEFAULT_INITIAL_BARS;
+
 const CHART_OPTIONS: DeepPartial<ChartOptions> = {
   layout: {
     background: { type: ColorType.Solid, color: '#131722' }, // TV dark chart bg
@@ -481,19 +505,17 @@ const ChartContainer = forwardRef<ChartHandle, Props>(
         candle.setData(built.cd);
         volume.setData(built.vd);
         lastTimeRef.current = built.lastTime;
-        // 1m: open on the last ~3 hours anchored to the live edge (fitContent
-        // over 2 days of 1m bars is unreadably zoomed out). Other timeframes
-        // fit the full history as before.
-        if (tfRef.current === '1m') {
+        // Open anchored to the live edge on a readable number of candles rather
+        // than fitting the whole window — see INITIAL_BARS. `from` clamps at 0,
+        // so a short history (a recent listing) still shows everything it has.
+        // The right-hand buffer matches what the resize path leaves, so the
+        // opening view and every later re-pin sit the same distance from the axis.
+        {
           const n = built.cd.length;
-          // Same buffer the resize path leaves, so the initial view and every
-          // later re-pin sit at the same distance from the axis.
           chart.timeScale().setVisibleLogicalRange({
-            from: Math.max(0, n - 180),
+            from: Math.max(0, n - initialBarsFor(tfRef.current)),
             to: n + rightOffsetFor(tfRef.current),
           });
-        } else {
-          chart.timeScale().fitContent();
         }
         applyMarkers();
         barCountRef.current = built.cd.length;
